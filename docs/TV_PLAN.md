@@ -1,29 +1,18 @@
-# NuvioTV-Cinemana implementation plan
+# NuvioTV-Cinemana implementation status
 
-## Baseline
-- Upstream: https://github.com/NuvioMedia/NuvioTV
-- Baseline tag: 1.0.0
-- Framework: Kotlin, Compose TV, Media3
-- Status: source preparation only; no TV application code changes or APK build yet.
+Implemented overlay: independent identity, fail-closed release signing, debug signing separation,
+native Cinemana AddonApi integration, catalogs/search/metadata/streams/subtitles, quality and
+edition handling, and a persistent direct-file offline download prototype with local playback.
 
-## Planned work
-1. Inspect official 1.0.0 build variants, package IDs, deep links and remote focus navigation.
-2. Add independent application ID and branding without replacing the official installation.
-3. Port native Cinemana catalogs, movie/series search, metadata, TMDB/IMDb matching, episodes, subtitles and source ranking.
-4. Add translated/dubbed source labeling and playback descriptions.
-5. Implement opt-in Bingers integration and 80% progress reporting, subject to API/free-account verification.
-6. Implement offline downloads and subtitle storage, with clear storage and content-permission handling.
-7. Add TV-specific remote/D-pad testing and device acceptance.
-8. Set up separate debug and signed release workflows.
+CI builds are pinned to official 1.0.0 commit 9f17e8bf4abc799dc8c832d2894a8b3b166e4353.
+Cinemana fixture tests passed in Actions; Android compilation/device verification remains separate.
 
-## Security and identity
-- Never commit signing keys, passwords, access tokens or OAuth client secrets.
-- GitHub Actions secrets are repository-scoped; configure signing secrets for this repository separately.
-- Use the same signing key as mobile for release, but a distinct Android application ID.
-- Reuse Trakt OAuth application configuration only after verifying redirect/deep-link compatibility.
-- Same Android signing certificate alone does not unify Trakt application identity.
+Bingers official API requires Legend/Icon (https://bingers.app/developers).
+The experimental mobile session client is preserved for protocol tests, with all runtime
+link/send/retry operations disabled. A future supported integration should use device OAuth.
 
-## Build policy
-- Do not label any APK release-ready without successful compilation, playback tests and remote-control acceptance.
-- Preserve upstream GPL-3.0 notices and license when distributing derivatives.
+Remaining acceptance: successful current-head APK build/tests; signed release with existing
+mobile secrets; on-device Cinemana playback/search/subtitles/remote tests; offline file integrity,
+reboot/cancel/storage tests; private-repository updater distribution; Trakt device authorization.
 
+Full evidence and limitations are maintained in TV_VALIDATION.md. No mobile repository modifications.

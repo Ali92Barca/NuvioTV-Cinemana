@@ -53,6 +53,21 @@ repo = 'app/src/main/java/com/nuvio/tv/data/repository/AddonRepositoryImpl.kt'
 patch(repo, '{ urls, names, enabledStates, _ -> Triple(urls, names, enabledStates) }', '''{ urls, names, enabledStates, _ ->
             Triple((listOf(com.nuvio.tv.data.cinemana.CinemanaAddonApi.BASE_URL) + urls).distinct(), names, enabledStates)
         }''')
+stream_contract = 'app/src/main/java/com/nuvio/tv/domain/repository/StreamRepository.kt'
+patch(stream_contract, 'forceRefresh: Boolean = false', 'forceRefresh: Boolean = false,\n        parentMetaId: String? = null')
+stream_repo = 'app/src/main/java/com/nuvio/tv/data/repository/StreamRepositoryImpl.kt'
+patch(stream_repo, '        forceRefresh: Boolean\n    ): Flow<NetworkResult<List<AddonStreams>>> = flow {', '        forceRefresh: Boolean,\n        parentMetaId: String?\n    ): Flow<NetworkResult<List<AddonStreams>>> = flow {')
+patch(stream_repo, '            videoId = videoId,\n            season = season,', '            videoId = parentMetaId?.let { "$it|$videoId" } ?: videoId,\n            season = season,')
+patch(stream_repo, '                    addons = sourceConfiguration.addons,', '                    parentMetaId = parentMetaId,\n                    addons = sourceConfiguration.addons,')
+patch(stream_repo, '        addons: List<Addon>,\n        debridSettings: DebridSettings,', '        parentMetaId: String?,\n        addons: List<Addon>,\n        debridSettings: DebridSettings,')
+patch(stream_repo, 'val streamsResult = getStreamsFromAddon(addon, type, videoId)', 'val requestedId = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(addon.id, type, videoId, parentMetaId, season, episode)\n                            val streamsResult = getStreamsFromAddon(addon, type, requestedId)')
+stream_vm = 'app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreenViewModel.kt'
+patch(stream_vm, '                streamRepository.getStreamsFromAllAddons(\n                    type = contentType,', '                streamRepository.getStreamsFromAllAddons(\n                    parentMetaId = contentId,\n                    type = contentType,')
+player_streams = source / 'app/src/main/java/com/nuvio/tv/ui/screens/player/PlayerRuntimeControllerStreams.kt'
+player_text = player_streams.read_text()
+if player_text.count('streamRepository.getStreamsFromAllAddons(') != 3:
+    raise SystemExit('Player stream call baseline mismatch')
+player_streams.write_text(player_text.replace('streamRepository.getStreamsFromAllAddons(', 'streamRepository.getStreamsFromAllAddons(\n            parentMetaId = contentId,'))
 tracking = 'app/src/main/java/com/nuvio/tv/core/tracking/TrackingScrobbleCoordinator.kt'
 patch(tracking, 'private val providerRegistry: TrackingProviderRegistry', 'private val providerRegistry: TrackingProviderRegistry,\n    private val bingers: com.nuvio.tv.data.bingers.BingersService')
 patch(tracking, '        val scrobblers = providerRegistry.connectedScrobblers()', '        bingers.onPlayback(action, event)\n        val scrobblers = providerRegistry.connectedScrobblers()')

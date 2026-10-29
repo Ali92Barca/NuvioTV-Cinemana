@@ -1,15 +1,14 @@
-# Android TV application identity
+# Android TV identity and signing
 
-Upstream tag: `NuvioMedia/NuvioTV@1.0.0`.
+Official baseline: NuvioMedia/NuvioTV 1.0.0 (9f17e8bf4abc799dc8c832d2894a8b3b166e4353).
 
-- Android application ID: `com.ali92barca.nuviotv.cinemana`
-- Kotlin namespace: retain upstream `com.nuvio.tv` for source compatibility
-- Initial fork version name: `1.0.0-cinemana.1`
-- In-app updater repository: `Ali92Barca/NuvioTV-Cinemana`
-- Release signing: pending, not configured; must use the mobile release keystore through repository-scoped Actions secrets
-- Trakt: pending OAuth redirect validation; no credentials stored here
+- Release package: `com.ali92barca.nuviotv.cinemana`
+- Debug package: `com.ali92barca.nuviotv.cinemana.debug`
+- Namespace remains `com.nuvio.tv` for source compatibility.
+- Version: `1.0.0-cinemana.1`, fork versionCode 1.
+- Updater repository: `Ali92Barca/NuvioTV-Cinemana`.
+- Release uses the existing mobile keystore through TV repository Actions secrets.
+- Debug uses a development key; it never requires the production keystore.
+- Trakt must reuse the mobile client registration; certificate identity alone is unrelated to Trakt's application limit.
 
-Identity patch is intentionally minimal. Cinemana, offline downloads, Bingers, TV navigation changes and signed APK builds are NOT yet implemented.
-
-The upstream build configuration contains default signing settings. Do not publish any APK without auditing and replacing these with secret-backed release signing and safe debug signing.
-
+See TV_VALIDATION.md for verification status and missing service/signing dependencies.
