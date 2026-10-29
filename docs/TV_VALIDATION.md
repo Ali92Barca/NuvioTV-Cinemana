@@ -41,7 +41,7 @@ release key. Release verifies its APK certificate against the supplied mobile ke
 Missing signing or required service values fail release without exposing values.
 
 ## Incomplete
-- Bingers service/authentication/settings card and STOP-at-80% hook are implemented but await TV compilation/device verification. The official external API requires Legend/Icon. At the user’s explicit request, TV uses the same experimental Scroblarr-compatible authenticated session protocol as mobile, not the official token API. Free-account write permission remains UNVERIFIED. Linking validates the session; writes require a separate opt-in. Authentication/subscription failures stop automatic writes. No live Bingers writes have been performed.
+- Bingers service/authentication/settings card and STOP-at-80% hook are implemented but await TV compilation/device verification. The official external API requires Legend/Icon. At the user’s explicit request, TV uses the same experimental Scroblarr-compatible authenticated session protocol as mobile, not the official token API. The user confirmed successful watch-history writes on their mobile account on 2026-10-29. TV-specific write behavior remains unverified. Linking validates the session; writes require a separate opt-in. Authentication/subscription failures stop automatic writes. No live Bingers writes have been performed.
 - Ported Bingers client tests run in CI. MIT protocol notice retained in SCROBLARR_NOTICE.txt.
 - Offline direct-file downloads, sidecar subtitles, persistent DownloadManager IDs, delete/cancel, and local Media3 player implemented but NOT device verified. HLS/DASH downloads are intentionally rejected.
 - Downloads are accessible under Settings > Tracking in this initial integration. Offline playback does not currently queue Bingers/Trakt completion.
@@ -53,4 +53,4 @@ Missing signing or required service values fail release without exposing values.
 
 No feature should be described as verified on TV based solely on the mobile contract tests.
 
-Official Bingers evidence checked 2026-10-29: https://bingers.app/developers and https://bingers.app/integrations. Official device OAuth is a separate paid API path. The selected Scroblarr session path must be tested on a real account; no free-account compatibility is claimed.
+Official Bingers evidence checked 2026-10-29: https://bingers.app/developers and https://bingers.app/integrations. Official device OAuth is a separate paid API path. The selected Scroblarr session path must be tested on a real account; mobile success is user-verified; TV success still needs on-device confirmation.

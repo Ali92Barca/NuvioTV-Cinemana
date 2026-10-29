@@ -8,7 +8,7 @@ CI builds are pinned to official 1.0.0 commit 9f17e8bf4abc799dc8c832d2894a8b3b16
 Cinemana fixture tests passed in Actions; Android compilation/device verification remains separate.
 
 Bingers official API requires Legend/Icon (https://bingers.app/developers).
-The user explicitly selected the mobile Scroblarr-compatible session method. Its linking/settings UI and opt-in completion sync are enabled as experimental; real free-account writes remain unverified. Official device OAuth is a separate paid path.
+The user explicitly selected the mobile Scroblarr-compatible session method. Its linking/settings UI and opt-in completion sync are enabled as experimental; the user confirmed mobile watch-history sync works on their account; TV verification is pending. Official device OAuth is a separate paid path.
 
 Remaining acceptance: successful current-head APK build/tests; signed release with existing
 mobile secrets; on-device Cinemana playback/search/subtitles/remote tests; offline file integrity,

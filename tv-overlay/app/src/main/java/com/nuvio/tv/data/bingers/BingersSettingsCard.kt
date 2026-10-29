@@ -27,7 +27,7 @@ fun BingersSettingsCard(viewModel: BingersSettingsViewModel = hiltViewModel()) {
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Bingers • تتبع المشاهدة عند 80٪")
         Text(state.message)
-        Text("الحساب المجاني: لم يُتحقق من صلاحية المزامنة بعد. يتم إظهار أي طلب اشتراك من الخدمة.")
+        Text("طريقة Scroblarr ناجحة على الموبايل حسب تجربة المستخدم؛ نسخة التلفاز تحتاج اختبار المزامنة بعد الربط.")
         if (!state.linked) {
             Text("اطلب رسالة دخول من موقع Bingers، والصق رابط الدخول الجديد هنا داخل التطبيق.")
             OutlinedTextField(value = link, onValueChange = { link = it }, singleLine = true,
