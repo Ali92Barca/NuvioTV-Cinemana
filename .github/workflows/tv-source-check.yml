@@ -12,6 +12,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Prepare official NuvioTV 1.0.0 source
         run: bash scripts/prepare-tv.sh
+      - name: Apply independent TV identity
+        run: python3 scripts/apply-tv-identity.py .work/NuvioTV
+      - name: Verify independent identity
+        run: |
+          grep -F 'applicationId = "com.ali92barca.nuviotv.cinemana"' .work/NuvioTV/app/build.gradle.kts
+          grep -F 'versionName = "1.0.0-cinemana.1"' .work/NuvioTV/app/build.gradle.kts
       - name: Confirm baseline
         run: |
           test -f .work/NuvioTV/app/build.gradle.kts
