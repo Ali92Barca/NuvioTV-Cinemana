@@ -121,3 +121,19 @@ for localized in (source / 'app/src/main/res').glob('values*/*.xml'):
     data = re.sub(r'(<string name="app_name">).*?(</string>)', r'\g<1>NuvioTV-Cinemana\2', data)
     localized.write_text(data)
 print('TV identity, signing separation and native Cinemana provider applied')
+
+# Public Trakt clients omit the unavailable secret; retain TV device-code UI.
+patch('app/src/main/java/com/nuvio/tv/data/repository/TraktAuthService.kt',
+      'BuildConfig.TRAKT_CLIENT_ID.isNotBlank() && BuildConfig.TRAKT_CLIENT_SECRET.isNotBlank()',
+      'BuildConfig.TRAKT_CLIENT_ID.isNotBlank()')
+auth = source / 'app/src/main/java/com/nuvio/tv/data/repository/TraktAuthService.kt'
+auth.write_text(auth.read_text().replace('clientSecret = BuildConfig.TRAKT_CLIENT_SECRET',
+                                         'clientSecret = BuildConfig.TRAKT_CLIENT_SECRET.takeIf { it.isNotBlank() }'))
+dto = source / 'app/src/main/java/com/nuvio/tv/data/remote/dto/trakt/TraktAuthDtos.kt'
+data = dto.read_text()
+assert data.count('@Json(name = "client_secret") val clientSecret: String') == 3
+dto.write_text(data.replace('@Json(name = "client_secret") val clientSecret: String',
+                            '@Json(name = "client_secret") val clientSecret: String?'))
+for endpoint in ['oauth/device/code', 'oauth/device/token', 'oauth/token', 'oauth/revoke']:
+    patch('app/src/main/java/com/nuvio/tv/data/remote/api/TraktApi.kt',
+          '@POST("' + endpoint + '")', '@POST("https://auth.trakt.tv/' + endpoint + '")')
