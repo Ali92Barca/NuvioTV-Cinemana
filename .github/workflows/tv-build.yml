@@ -61,7 +61,7 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" > "$RUNNER_TEMP/tv-badging.txt"
           grep -F "package: name='com.ali92barca.nuviotv.cinemana.debug'" "$RUNNER_TEMP/tv-badging.txt"
       - uses: actions/upload-artifact@v4
-        if: steps.verify_debug.outcome == 'success'
+        if: ${{ !cancelled() && steps.verify_debug.outcome == 'success' }}
         with:
           name: NuvioTV-Cinemana-diagnostic-debug
           path: upstream/app/build/outputs/apk/full/debug/*.apk
