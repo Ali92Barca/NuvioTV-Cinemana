@@ -20,9 +20,26 @@ class BingersSettingsViewModel @Inject constructor(val service: BingersService) 
 /** Ordinary TV buttons participate in D-pad focus; text fields open the device keyboard. */
 @Composable
 fun BingersSettingsCard(viewModel: BingersSettingsViewModel = hiltViewModel()) {
+    val service = viewModel.service
+    val state by service.state.collectAsState()
+    var link by remember { mutableStateOf("") }
+    LaunchedEffect(service) { service.refresh() }
     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Bingers • تتبع المشاهدة عند 80٪")
-        Text("واجهة ربط التطبيقات الرسمية تتطلب اشتراك Legend أو Icon. الحساب المجاني غير مدعوم رسمياً لهذا الربط.")
-        Text("الإرسال التلقائي معطّل. لم يُختبر حساب مدفوع، ولا يجري استخدام جلسة التطبيق كبديل للاشتراك.")
+        Text(state.message)
+        Text("الحساب المجاني: لم يُتحقق من صلاحية المزامنة بعد. يتم إظهار أي طلب اشتراك من الخدمة.")
+        if (!state.linked) {
+            Text("اطلب رسالة دخول من موقع Bingers، والصق رابط الدخول الجديد هنا داخل التطبيق.")
+            OutlinedTextField(value = link, onValueChange = { link = it }, singleLine = true,
+                visualTransformation = PasswordVisualTransformation(), label = { androidx.compose.material3.Text("رابط دخول Bingers") }, modifier = Modifier.fillMaxWidth())
+            Button(onClick = { service.link(link); link = "" }, enabled = !state.busy && link.isNotBlank()) { Text("ربط الحساب") }
+        } else {
+            Button(onClick = { service.setEnabled(!state.enabled) }, enabled = !state.busy) {
+                Text(if (state.enabled) "إيقاف المزامنة" else "تفعيل المزامنة")
+            }
+            Button(onClick = service::retry, enabled = !state.busy) { Text("إعادة محاولة المزامنة (${state.pending} معلقة، ${state.unmatched} غير مطابقة)") }
+            Button(onClick = service::disconnect, enabled = !state.busy) { Text("فصل الحساب") }
+        }
     }
 }
+

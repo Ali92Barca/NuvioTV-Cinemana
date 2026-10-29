@@ -124,9 +124,9 @@ class BingersService @Inject constructor(
             unmatched = data.optJSONArray("failed")?.length() ?: 0, busy = busy, message = message)
     }
     private fun integrationAvailable(): Boolean {
-        // Official external API requires Legend/Icon. Private session protocol is not shipped enabled.
-        state.value = BingersUiState(message = "ربط التطبيقات في Bingers يتطلب Legend أو Icon؛ التتبع المجاني غير متاح رسمياً")
-        return false
+        // User-selected experimental Scroblarr-compatible session flow, matching the mobile app.
+        // Linking does not enable writes; the user must separately opt in after session validation.
+        return true
     }
     fun refresh() {
         if (!integrationAvailable()) return
