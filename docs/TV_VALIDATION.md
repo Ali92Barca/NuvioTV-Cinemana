@@ -41,7 +41,7 @@ release key. Release verifies its APK certificate against the supplied mobile ke
 Missing signing or required service values fail release without exposing values.
 
 ## Incomplete
-- Bingers service/authentication/settings card and STOP-at-80% hook are implemented but await TV compilation/device verification. Free-account write support is NOT verified; subscription failures are surfaced.
+- Bingers service/authentication/settings card and STOP-at-80% hook are implemented but await TV compilation/device verification. Official API free-account support is unavailable: Bingers developers page states Legend/Icon subscriptions are required. Session-based experimental transport is disabled (all send/link/retry entry points fail closed); UI reports the limitation. No live Bingers writes have been performed.
 - Ported Bingers client tests run in CI. MIT protocol notice retained in SCROBLARR_NOTICE.txt.
 - Offline direct-file downloads, sidecar subtitles, persistent DownloadManager IDs, delete/cancel, and local Media3 player implemented but NOT device verified. HLS/DASH downloads are intentionally rejected.
 - Downloads are accessible under Settings > Tracking in this initial integration. Offline playback does not currently queue Bingers/Trakt completion.
@@ -52,3 +52,5 @@ Missing signing or required service values fail release without exposing values.
 - Full TV/USB remote tests on Android 9 CBOX and playback tests.
 
 No feature should be described as verified on TV based solely on the mobile contract tests.
+
+Official Bingers evidence checked 2026-10-29: https://bingers.app/developers and https://bingers.app/integrations. A supported future integration should use official device OAuth, not the old experimental session protocol.

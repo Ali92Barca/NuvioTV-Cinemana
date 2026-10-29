@@ -123,7 +123,13 @@ class BingersService @Inject constructor(
             pending = data.optJSONArray("queue")?.length() ?: 0,
             unmatched = data.optJSONArray("failed")?.length() ?: 0, busy = busy, message = message)
     }
+    private fun integrationAvailable(): Boolean {
+        // Official external API requires Legend/Icon. Private session protocol is not shipped enabled.
+        state.value = BingersUiState(message = "ربط التطبيقات في Bingers يتطلب Legend أو Icon؛ التتبع المجاني غير متاح رسمياً")
+        return false
+    }
     fun refresh() {
+        if (!integrationAvailable()) return
         val key = profileKey() ?: return
         scope.launch { mutex.withLock {
             try { val data = load(key); publish(key, data, if (data.optString("cookie").isBlank()) "غير مرتبط" else data.optString("lastMessage").ifBlank { "مرتبط • المزامنة عند اكتمال 80٪ من المشاهدة" }) }
@@ -131,6 +137,7 @@ class BingersService @Inject constructor(
         } }
     }
     fun link(magicLink: String) {
+        if (!integrationAvailable()) return
         val key = profileKey() ?: return
         scope.launch { mutex.withLock {
             state.value = state.value.copy(busy = true, message = "جاري ربط الحساب…")
@@ -147,6 +154,7 @@ class BingersService @Inject constructor(
         } }
     }
     fun setEnabled(enabled: Boolean) {
+        if (!integrationAvailable()) return
         val key = profileKey() ?: return
         scope.launch { mutex.withLock {
             try {
@@ -170,6 +178,7 @@ class BingersService @Inject constructor(
     }
 
     fun onScrobble(profileId: Int, action: TrackingScrobbleAction, event: TrackingScrobbleEvent) {
+        if (!integrationAvailable()) return
         if (!BingersClient.completed(action.wireValue, event.progressPercent)) return
         val key = profileKey(profileId) ?: return
         scope.launch { mutex.withLock {
@@ -200,6 +209,7 @@ class BingersService @Inject constructor(
         onScrobble(activeProfileId.value, action, event)
     }
     fun retry() {
+        if (!integrationAvailable()) return
         val key = profileKey() ?: return
         scope.launch { mutex.withLock {
             try {
