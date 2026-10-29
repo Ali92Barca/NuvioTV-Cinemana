@@ -62,7 +62,7 @@ class BingersService @Inject constructor(
             if (method == "POST") request.post(body.orEmpty().toRequestBody("application/json".toMediaType())) else request.get()
             // Dedicated client has no network logger/interceptor: never expose magic tokens or cookies.
             http.newCall(request.build()).execute().use {
-                BingersResponse(it.code, it.body.string(), it.headers.values("Set-Cookie"))
+                BingersResponse(it.code, requireNotNull(it.body).string(), it.headers.values("Set-Cookie"))
             }
         }
     }
@@ -78,7 +78,7 @@ class BingersService @Inject constructor(
     private suspend fun httpGetText(url: String): String = withContext(Dispatchers.IO) {
         http.newCall(Request.Builder().url(url).build()).execute().use {
             check(it.isSuccessful) { "Provider request failed" }
-            it.body.string()
+            requireNotNull(it.body).string()
         }
     }
     private data class MatcherSettings(val apiKey: String, val language: String = "ar") {

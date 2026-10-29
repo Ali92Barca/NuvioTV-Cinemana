@@ -114,4 +114,8 @@ text, count = re.subn(r'(<string name="app_name">).*?(</string>)', r'\g<1>NuvioT
 if count != 1:
     raise SystemExit('Missing application name')
 strings.write_text(text)
+for localized in (source / 'app/src/main/res').glob('values*/*.xml'):
+    data = localized.read_text()
+    data = re.sub(r'(<string name="app_name">).*?(</string>)', r'\g<1>NuvioTV-Cinemana\2', data)
+    localized.write_text(data)
 print('TV identity, signing separation and native Cinemana provider applied')
