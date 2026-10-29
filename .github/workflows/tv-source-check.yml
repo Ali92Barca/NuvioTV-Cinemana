@@ -18,6 +18,8 @@ jobs:
         run: |
           grep -F 'applicationId = "com.ali92barca.nuviotv.cinemana"' .work/NuvioTV/app/build.gradle.kts
           grep -F 'versionName = "1.0.0-cinemana.1"' .work/NuvioTV/app/build.gradle.kts
+      - name: Validate TV configuration
+        run: python3 scripts/check-tv-config.py .work/NuvioTV
       - name: Confirm baseline
         run: |
           test -f .work/NuvioTV/app/build.gradle.kts
