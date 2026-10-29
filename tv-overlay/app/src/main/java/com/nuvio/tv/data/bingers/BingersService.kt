@@ -46,7 +46,7 @@ data class BingersUiState(val linked: Boolean = false, val enabled: Boolean = fa
 class BingersService @Inject constructor(
     @ApplicationContext context: Context,
     profileDataStore: ProfileDataStore,
-    private val authManager: AuthManager,
+    private val authManager: dagger.Lazy<AuthManager>,
 ) : ProfileScopedCredentialStore {
     private var preferences: SharedPreferences? = null
     private val mutex = Mutex()
@@ -71,7 +71,7 @@ class BingersService @Inject constructor(
     init {
         preferences = context.getSharedPreferences("nuvio_bingers_private", Context.MODE_PRIVATE)
         scope.launch {
-            combine(activeProfileId, authManager.authState) { profile, auth -> profile to auth }
+            combine(activeProfileId, authManager.get().authState) { profile, auth -> profile to auth }
                 .collectLatest { state.value = BingersUiState(); refresh() }
         }
     }
@@ -85,7 +85,7 @@ class BingersService @Inject constructor(
         val enabled get() = apiKey.isNotBlank()
     }
     fun profileKey(profile: Int = activeProfileId.value): String? {
-        val owner = (authManager.authState.value as? AuthState.FullAccount)?.userId ?: "local"
+        val owner = (authManager.get().authState.value as? AuthState.FullAccount)?.userId ?: "local"
         return MessageDigest.getInstance("SHA-256").digest("$owner:$profile".toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
