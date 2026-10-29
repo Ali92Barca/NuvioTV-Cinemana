@@ -51,8 +51,10 @@ patch(network, '''fun provideAddonApi(retrofit: Retrofit): AddonApi =
         com.nuvio.tv.data.cinemana.CinemanaAddonApi(retrofit.create(AddonApi::class.java), moshi, okHttpClient)''')
 repo = 'app/src/main/java/com/nuvio/tv/data/repository/AddonRepositoryImpl.kt'
 patch(repo, '{ urls, names, enabledStates, _ -> Triple(urls, names, enabledStates) }', '''{ urls, names, enabledStates, _ ->
-            Triple((listOf(com.nuvio.tv.data.cinemana.CinemanaAddonApi.BASE_URL) + urls).distinct(), names, enabledStates)
+            Triple((builtinAddonUrls + urls).distinct(), names, enabledStates)
         }''')
+patch(repo, '    private val clock: () -> Long\n', '    private val clock: () -> Long,\n    private val builtinAddonUrls: List<String> = emptyList()\n')
+patch(repo, '        clock = System::currentTimeMillis\n', '        clock = System::currentTimeMillis,\n        builtinAddonUrls = listOf(com.nuvio.tv.data.cinemana.CinemanaAddonApi.BASE_URL)\n')
 stream_contract = 'app/src/main/java/com/nuvio/tv/domain/repository/StreamRepository.kt'
 patch(stream_contract, 'forceRefresh: Boolean = false', 'forceRefresh: Boolean = false,\n        parentMetaId: String? = null')
 stream_repo = 'app/src/main/java/com/nuvio/tv/data/repository/StreamRepositoryImpl.kt'
