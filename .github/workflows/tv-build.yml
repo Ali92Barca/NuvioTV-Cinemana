@@ -46,10 +46,10 @@ jobs:
           SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
         run: python3 integration/scripts/configure-services.py upstream/local.properties
       - name: Contract tests
-        run: upstream/gradlew -p integration/tests/cinemana-jvm test --stacktrace
+        run: upstream/gradlew -p integration/tests/cinemana-jvm test --no-daemon --stacktrace
       - name: Build and test TV debug
         working-directory: upstream
-        run: ./gradlew :app:testFullDebugUnitTest :app:assembleFullDebug --stacktrace --max-workers=2 -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
+        run: ./gradlew :app:testFullDebugUnitTest :app:assembleFullDebug --stacktrace --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
       - name: Verify debug APK identity and certificate
         run: |
           set -euo pipefail
@@ -121,7 +121,7 @@ jobs:
           set -euo pipefail
           export NUVIO_RELEASE_STORE_FILE="$RUNNER_TEMP/tv-release.jks"
           python3 ../integration/scripts/prepare-signing.py
-          ./gradlew :app:assembleFullRelease --stacktrace --max-workers=2 -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
+          ./gradlew :app:assembleFullRelease --stacktrace --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
           apk=$(find app/build/outputs/apk/full/release -name '*universal*.apk' -print -quit)
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk"
           python3 ../integration/scripts/verify-release-certificate.py "$apk"
