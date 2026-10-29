@@ -137,3 +137,8 @@ dto.write_text(data.replace('@Json(name = "client_secret") val clientSecret: Str
 for endpoint in ['oauth/device/code', 'oauth/device/token', 'oauth/token', 'oauth/revoke']:
     patch('app/src/main/java/com/nuvio/tv/data/remote/api/TraktApi.kt',
           '@POST("' + endpoint + '")', '@POST("https://auth.trakt.tv/' + endpoint + '")')
+
+# A fork without a configured Nuvio backend must remain usable locally.
+patch('app/src/main/java/com/nuvio/tv/MainActivity.kt',
+      'hasSeenAuthQrOnFirstLaunch == false &&\\n                        authState !is AuthState.FullAccount &&',
+      'hasSeenAuthQrOnFirstLaunch == false &&\\n                        BuildConfig.SUPABASE_URL.isNotBlank() &&\\n                        BuildConfig.SUPABASE_ANON_KEY.isNotBlank() &&\\n                        authState !is AuthState.FullAccount &&')
