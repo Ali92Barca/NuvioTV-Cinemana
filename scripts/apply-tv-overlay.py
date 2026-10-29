@@ -44,6 +44,7 @@ patch(gradle, '''signingConfig = if (useDebugReleaseSigning) {
                 signingConfigs.getByName("release")
             }''', 'signingConfig = signingConfigs.getByName("release")')
 patch(gradle, 'variant.applicationId.set(if (isPlaystore) "com.nuvio.appdebug" else "com.nuviodebug.com")', 'variant.applicationId.set("com.ali92barca.nuviotv.cinemana.debug")')
+patch(gradle, '    testImplementation("junit:junit:4.13.2")', '    testImplementation("junit:junit:4.13.2")\n    testImplementation("org.json:json:20240303")')
 network = 'app/src/main/java/com/nuvio/tv/core/di/NetworkModule.kt'
 patch(network, '''fun provideAddonApi(retrofit: Retrofit): AddonApi =
         retrofit.create(AddonApi::class.java)''', '''fun provideAddonApi(retrofit: Retrofit, moshi: Moshi, okHttpClient: OkHttpClient): AddonApi =
@@ -52,6 +53,43 @@ repo = 'app/src/main/java/com/nuvio/tv/data/repository/AddonRepositoryImpl.kt'
 patch(repo, '{ urls, names, enabledStates, _ -> Triple(urls, names, enabledStates) }', '''{ urls, names, enabledStates, _ ->
             Triple((listOf(com.nuvio.tv.data.cinemana.CinemanaAddonApi.BASE_URL) + urls).distinct(), names, enabledStates)
         }''')
+tracking = 'app/src/main/java/com/nuvio/tv/core/tracking/TrackingScrobbleCoordinator.kt'
+patch(tracking, 'private val providerRegistry: TrackingProviderRegistry', 'private val providerRegistry: TrackingProviderRegistry,\n    private val bingers: com.nuvio.tv.data.bingers.BingersService')
+patch(tracking, '        val scrobblers = providerRegistry.connectedScrobblers()', '        bingers.onPlayback(action, event)\n        val scrobblers = providerRegistry.connectedScrobblers()')
+settings = 'app/src/main/java/com/nuvio/tv/ui/screens/settings/TrackingSettingsScreen.kt'
+patch(settings, '                    item(key = "tracking_sources") {', '''                    item(key = "bingers") {
+                        com.nuvio.tv.data.bingers.BingersSettingsCard()
+                    }
+                    item(key = "tracking_sources") {''')
+patch(settings, '                    item(key = "tracking_sources") {', '''                    item(key = "offline_downloads") {
+                        com.nuvio.tv.data.offline.OfflineDownloadsCard()
+                    }
+                    item(key = "tracking_sources") {''')
+stream_screen = 'app/src/main/java/com/nuvio/tv/ui/screens/stream/StreamScreen.kt'
+patch(stream_screen, '            Box(modifier = Modifier.padding(vertical = NuvioTheme.spacing.xs)) {', '            Column(modifier = Modifier.padding(vertical = NuvioTheme.spacing.xs)) {')
+patch(stream_screen, '''                    }} else null
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun StreamCard(''', '''                    }} else null
+                )
+                com.nuvio.tv.data.offline.OfflineDownloadButton(stream)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun StreamCard(''')
+patch('app/src/main/AndroidManifest.xml', '</application>', '''    <activity android:name="com.nuvio.tv.data.offline.OfflinePlayerActivity"
+            android:exported="false" android:screenOrientation="landscape" />
+    </application>''')
 # Preserve all TV Compose/focus/player code and inject through the existing provider abstraction.
 shutil.copytree(root / 'tv-overlay', source, dirs_exist_ok=True)
 strings = source / 'app/src/main/res/values/strings.xml'

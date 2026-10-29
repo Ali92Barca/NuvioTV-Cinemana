@@ -20,7 +20,8 @@
 - Overlay successfully applied to clean pinned TV checkout.
 - Seven static identity/signing assertions passed.
 - Four Python signing/service failure-path tests passed.
-- Gradle test attempt blocked before running: services.gradle.org unreachable in execution environment.
+- Local Gradle attempt blocked before running: services.gradle.org unreachable in execution environment.
+- GitHub Actions subsequently passed the native Cinemana contract test job; TV compilation is in progress.
 - No local Kotlin compilation, APK or device tests have passed yet. Actions must establish these.
 
 ## Signing and service setup
@@ -40,8 +41,11 @@ release key. Release verifies its APK certificate against the supplied mobile ke
 Missing signing or required service values fail release without exposing values.
 
 ## Incomplete
-- Bingers UI/authentication and player 80% integration; free-account support not verified.
-- Offline video/subtitle download queue, persistence and offline playback UI.
+- Bingers service/authentication/settings card and STOP-at-80% hook are implemented but await TV compilation/device verification. Free-account write support is NOT verified; subscription failures are surfaced.
+- Ported Bingers client tests run in CI. MIT protocol notice retained in SCROBLARR_NOTICE.txt.
+- Offline direct-file downloads, sidecar subtitles, persistent DownloadManager IDs, delete/cancel, and local Media3 player implemented but NOT device verified. HLS/DASH downloads are intentionally rejected.
+- Downloads are accessible under Settings > Tracking in this initial integration. Offline playback does not currently queue Bingers/Trakt completion.
+- Download failure/reboot/full-storage/cancel tests and offline remote navigation still required.
 - Live Cinemana access from the user's ISP, cross-catalog resolution on device.
 - Signed release and release publication; repository is private so unauthenticated updater access
   to its GitHub Releases also requires a distribution decision before claiming updates work.
