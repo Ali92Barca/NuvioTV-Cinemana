@@ -20,8 +20,14 @@ class CinemanaAddonApi(
     private val http: OkHttpClient,
 ) : AddonApi {
     companion object { const val BASE_URL = "https://cinemana.nuvio.invalid" }
+    // BuildConfig.DEBUG enables the upstream BASIC logger, which includes TMDB query keys.
+    // Provider traffic deliberately uses no logger or diagnostics interceptors.
+    private val transport = http.newBuilder().apply {
+        interceptors().clear()
+        networkInterceptors().clear()
+    }.build()
     private suspend fun fetch(url: String): String = withContext(Dispatchers.IO) {
-        http.newCall(Request.Builder().url(url).build()).execute().use { response ->
+        transport.newCall(Request.Builder().url(url).build()).execute().use { response ->
             check(response.isSuccessful) { "Provider HTTP ${response.code}" }
             requireNotNull(response.body).string()
         }
