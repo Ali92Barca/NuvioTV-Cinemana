@@ -1,0 +1,19 @@
+name: TV source baseline check
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/prepare-tv.sh'
+      - '.github/workflows/tv-source-check.yml'
+jobs:
+  source-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare official NuvioTV 1.0.0 source
+        run: bash scripts/prepare-tv.sh
+      - name: Confirm baseline
+        run: |
+          test -f .work/NuvioTV/app/build.gradle.kts
+          git -C .work/NuvioTV describe --tags --exact-match
+          echo "Source check passed. No APK built."
