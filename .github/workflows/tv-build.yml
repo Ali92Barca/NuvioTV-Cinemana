@@ -1,0 +1,128 @@
+name: Build independent Cinemana TV APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['scripts/**', 'tv-overlay/**', 'tests/**', '.github/workflows/tv-build.yml']
+permissions:
+  contents: read
+concurrency:
+  group: tv-build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: integration
+      - uses: actions/checkout@v4
+        with:
+          repository: NuvioMedia/NuvioTV
+          ref: 9f17e8bf4abc799dc8c832d2894a8b3b166e4353
+          path: upstream
+          submodules: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Apply TV integration
+        run: |
+          python3 integration/scripts/apply-tv-overlay.py upstream
+          python3 integration/scripts/check-tv-config.py upstream
+          python3 -m unittest discover -s integration/tests/python -v
+      - name: Configure service registrations
+        env:
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+          TRAKT_REDIRECT_URI: ${{ secrets.TRAKT_REDIRECT_URI }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+        run: python3 integration/scripts/configure-services.py upstream/local.properties
+      - name: Contract tests
+        run: upstream/gradlew -p integration/tests/cinemana-jvm test --stacktrace
+      - name: Build and test TV debug
+        working-directory: upstream
+        run: ./gradlew :app:testFullDebugUnitTest :app:assembleFullDebug --stacktrace --max-workers=2 -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
+      - name: Verify debug APK identity and certificate
+        run: |
+          set -euo pipefail
+          apk=$(find upstream/app/build/outputs/apk/full/debug -name '*universal*.apk' -print -quit)
+          test -n "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" | head -1 | grep -F "com.ali92barca.nuviotv.cinemana.debug"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NuvioTV-Cinemana-debug
+          path: upstream/app/build/outputs/apk/full/debug/*.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tv-test-reports
+          path: |
+            integration/tests/cinemana-jvm/build/reports/**
+            integration/tests/cinemana-jvm/build/test-results/**
+            upstream/app/build/reports/**
+            upstream/app/build/test-results/**
+          if-no-files-found: ignore
+      - name: Remove service configuration
+        if: always()
+        run: rm -f upstream/local.properties
+  release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: debug
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: integration
+      - uses: actions/checkout@v4
+        with:
+          repository: NuvioMedia/NuvioTV
+          ref: 9f17e8bf4abc799dc8c832d2894a8b3b166e4353
+          path: upstream
+          submodules: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: python3 integration/scripts/apply-tv-overlay.py upstream
+      - name: Configure shared service registrations
+        env:
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+          TRAKT_REDIRECT_URI: ${{ secrets.TRAKT_REDIRECT_URI }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+          REQUIRE_REGISTRATIONS: 'true'
+        run: python3 integration/scripts/configure-services.py upstream/local.properties
+      - name: Build with mobile signing certificate
+        working-directory: upstream
+        env:
+          MOBILE_KEYSTORE_BASE64: ${{ secrets.MOBILE_KEYSTORE_BASE64 }}
+          NUVIO_RELEASE_STORE_PASSWORD: ${{ secrets.MOBILE_STORE_PASSWORD }}
+          NUVIO_RELEASE_KEY_ALIAS: ${{ secrets.MOBILE_KEY_ALIAS }}
+          NUVIO_RELEASE_KEY_PASSWORD: ${{ secrets.MOBILE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export NUVIO_RELEASE_STORE_FILE="$RUNNER_TEMP/tv-release.jks"
+          python3 ../integration/scripts/prepare-signing.py
+          ./gradlew :app:assembleFullRelease --stacktrace --max-workers=2 -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
+          apk=$(find app/build/outputs/apk/full/release -name '*universal*.apk' -print -quit)
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk"
+          python3 ../integration/scripts/verify-release-certificate.py "$apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NuvioTV-Cinemana-release
+          path: upstream/app/build/outputs/apk/full/release/*.apk
+          if-no-files-found: error
+      - name: Remove signing and service material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/tv-release.jks" upstream/local.properties

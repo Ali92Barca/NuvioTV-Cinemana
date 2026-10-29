@@ -21,3 +21,4 @@ for old, new in replacements.items():
     content = content.replace(old, new, 1)
 gradle.write_text(content, encoding="utf-8")
 print("Applied independent application ID, version and update repository.")
+

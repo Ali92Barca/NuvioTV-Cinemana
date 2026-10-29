@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'scripts/prepare-tv.sh'
+      - 'scripts/**'
       - '.github/workflows/tv-source-check.yml'
 jobs:
   source-check:
@@ -13,7 +13,7 @@ jobs:
       - name: Prepare official NuvioTV 1.0.0 source
         run: bash scripts/prepare-tv.sh
       - name: Apply independent TV identity
-        run: python3 scripts/apply-tv-identity.py .work/NuvioTV
+        run: python3 scripts/apply-tv-overlay.py .work/NuvioTV
       - name: Verify independent identity
         run: |
           grep -F 'applicationId = "com.ali92barca.nuviotv.cinemana"' .work/NuvioTV/app/build.gradle.kts
@@ -25,3 +25,4 @@ jobs:
           test -f .work/NuvioTV/app/build.gradle.kts
           git -C .work/NuvioTV describe --tags --exact-match
           echo "Source check passed. No APK built."
+

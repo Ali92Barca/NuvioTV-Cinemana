@@ -8,4 +8,5 @@ mkdir -p "$(dirname "$TARGET")"
 if [[ -e "$TARGET" ]]; then echo "Target already exists: $TARGET" >&2; exit 1; fi
 git clone --depth 1 --branch "$UPSTREAM_REF" "$UPSTREAM_URL" "$TARGET"
 echo "Prepared NuvioTV $UPSTREAM_REF at $TARGET"
-echo "No application patches applied yet."
+test "$(git -C "$TARGET" rev-parse HEAD)" = "9f17e8bf4abc799dc8c832d2894a8b3b166e4353"
+

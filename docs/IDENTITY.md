@@ -12,3 +12,4 @@ Upstream tag: `NuvioMedia/NuvioTV@1.0.0`.
 Identity patch is intentionally minimal. Cinemana, offline downloads, Bingers, TV navigation changes and signed APK builds are NOT yet implemented.
 
 The upstream build configuration contains default signing settings. Do not publish any APK without auditing and replacing these with secret-backed release signing and safe debug signing.
+
