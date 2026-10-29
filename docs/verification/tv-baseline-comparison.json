@@ -1,0 +1,24 @@
+{
+  "baseline_tests": 1263,
+  "modified_tests": 1265,
+  "inherited_failures": [
+    "androidx.media3.datasource.LocalhostZeroCopyDataSourceTest :: testHttpError404",
+    "androidx.media3.exoplayer.upstream.DefaultAllocatorTest :: testLateReleasedAllocationsMemoryLeak",
+    "com.nuvio.tv.core.player.DolbyVisionBaseLayerPolicyTest :: Samsung device on DV display still falls through to NATIVE_DV7",
+    "com.nuvio.tv.core.player.DolbyVisionBaseLayerPolicyTest :: non-Amazon device on DV display with DV81 decoder falls through to NATIVE_DV7",
+    "com.nuvio.tv.core.player.FrameRateUtilsMkvSparseTracksTest :: sparse Tracks fetch terminates the probe file with a stub Cluster",
+    "com.nuvio.tv.core.player.MatroskaAfrProbeTest :: stub Cluster terminates Cluster-less head and resizes Segment",
+    "com.nuvio.tv.data.local.CollectionsDataStoreSourceMigrationTest :: validation rejects trakt sources without list id",
+    "com.nuvio.tv.data.repository.TraktAuthServiceTest :: refresh token 400 clears credentials and prevents another refresh",
+    "com.nuvio.tv.data.simkl.SimklMutationReconciliationTest :: history response records episode and resolved anime classification locally",
+    "com.nuvio.tv.ui.screens.player.PostPlayRecommendationStateTest :: loaded recommendation holds natural completion until overlay evaluation",
+    "com.nuvio.tv.ui.screens.player.PostPlayRecommendationStateTest :: post play returns to player only while its window is available",
+    "com.nuvio.tv.ui.screens.player.TrackSelectionInvestigationTest :: testBuildStreamInfoDataWithActiveVideoFormat"
+  ],
+  "new_or_changed_failures": [],
+  "missing_tests": [],
+  "new_skips": [],
+  "fixed_failures": [],
+  "regression_check_passed": true,
+  "full_suite_passed": false
+}

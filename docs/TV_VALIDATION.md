@@ -21,8 +21,13 @@
 - Seven static identity/signing assertions passed.
 - Four Python signing/service failure-path tests passed.
 - Local Gradle attempt blocked before running: services.gradle.org unreachable in execution environment.
-- GitHub Actions subsequently passed the native Cinemana contract test job; TV compilation is in progress.
-- No local Kotlin compilation, APK or device tests have passed yet. Actions must establish these.
+- GitHub Actions passed the 43 provider/client fixture tests. TV Kotlin/Hilt compilation and APK assembly passed after fixing the Bingers AuthManager dependency cycle.
+- A diagnostic FullDebug APK was assembled on run 40958248986; apksigner verified its v2 signature and aapt confirmed com.ali92barca.nuviotv.cinemana.debug, versionCode 1, versionName 1.0.0-cinemana.1.
+- Full TV suite: 1265 tests, 12 failed, 1 skipped. Official baseline: 1263 tests, the identical 12 failures and 1 skip. Two added TV provider tests passed. All six addon-placeholder regressions from the initial integration were fixed by injecting builtin URLs only through production wiring.
+- JUnit comparison confirmed zero new/changed failures, zero missing tests and zero new skips. See docs/verification/tv-baseline-comparison.json.
+- Full-suite status remains FAILED; inherited failures are not excluded or converted to passing tests. The Release job remains blocked. A diagnostic APK is not a release-ready acceptance claim.
+- Run 40958248986 verified the APK but upload was skipped by an implicit success() condition after failed tests. The condition was corrected in 82bf737; a replacement build is in progress.
+- No device playback, offline transfer, remote focus or TV Bingers write has been verified.
 
 ## Signing and service setup
 Release uses MOBILE_KEYSTORE_BASE64, MOBILE_STORE_PASSWORD, MOBILE_KEY_ALIAS and
@@ -54,3 +59,12 @@ Missing signing or required service values fail release without exposing values.
 No feature should be described as verified on TV based solely on the mobile contract tests.
 
 Official Bingers evidence checked 2026-10-29: https://bingers.app/developers and https://bingers.app/integrations. Official device OAuth is a separate paid API path. The selected Scroblarr session path must be tested on a real account; mobile success is user-verified; TV success still needs on-device confirmation.
+
+## Evidence URLs
+- Modified source and APK verification: https://github.com/Ali92Barca/NuvioTV-Cinemana/actions/runs/40958248986
+- Official runtime baseline: https://github.com/Ali92Barca/NuvioTV-Cinemana/actions/runs/40958156514
+- Replacement diagnostic upload run: see the latest tv-build workflow run on commit 82bf737.
+
+The baseline changes only debug signing (to remove the unavailable official keystore dependency)
+and adds the same org.json JVM test dependency as the modified build. Its runtime provider,
+playback and tracking logic is otherwise unchanged. Both use empty local service properties.
