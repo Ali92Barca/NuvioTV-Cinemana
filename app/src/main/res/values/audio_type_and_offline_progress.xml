@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="atmos_audio_delay_label">Dolby Atmos audio delay</string>
+    <string name="audio_type_delay_active">Active for the selected track • Saved for this profile</string>
+    <string name="audio_type_delay_inactive">Inactive for the selected track</string>
+    <string name="offline_watched_percent">Watched: %1$d%%</string>
+</resources>

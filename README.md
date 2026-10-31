@@ -1,17 +1,32 @@
-# NuvioTV-Cinemana
+<div align="center">
 
-Independent Android TV integration over official NuvioMedia/NuvioTV 1.0.0,
-pinned to `9f17e8bf4abc799dc8c832d2894a8b3b166e4353`.
+  <img src="assets/brand/app_logo_wordmark.png" alt="Nuvio" width="300" />
 
-The maintained overlay retains the upstream Android TV UI, focus navigation and player.
-Cinemana is handled natively inside AddonApi; no external Node process is needed.
+  <p>
+    A free, open-source media app for your phone, your desktop, and the TV you already own.
+    <br />
+    Bring your own sources. Nuvio turns them into a library with artwork, ratings, subtitles, and your place saved on every screen.
+  </p>
 
-## Build
+  [Website](https://nuvio.tv) · [GitHub releases](https://github.com/NuvioMedia/NuvioTV/releases/latest) · [Support Nuvio](https://nuvio.tv/support)
 
-`bash scripts/prepare-tv.sh` then
-`python3 scripts/apply-tv-overlay.py .work/NuvioTV` and
-`python3 scripts/check-tv-config.py .work/NuvioTV`.
+</div>
 
-The build workflow runs provider contract tests and Android unit tests before assembling
-FullDebug APKs. Release never falls back to a debug or upstream signing key.
-See [validation](docs/TV_VALIDATION.md) for tested status and remaining work.
+## Get Nuvio TV
+
+- [Android TV on Google Play](https://play.google.com/store/apps/details?id=com.nuvio.app)
+- [Android TV APK](https://github.com/NuvioMedia/NuvioTV/releases/latest)
+
+## Build from source
+
+```bash
+git clone https://github.com/NuvioMedia/NuvioTV.git
+cd NuvioTV
+./gradlew :app:assembleFullDebug
+```
+
+Nuvio TV is built with Kotlin, Jetpack Compose, TV Material 3, and Media3. Development requires Android Studio, a JDK, and the Android SDK.
+
+## License
+
+[GNU General Public License v3.0](./LICENSE)

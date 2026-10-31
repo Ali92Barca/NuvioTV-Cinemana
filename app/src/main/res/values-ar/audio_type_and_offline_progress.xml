@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="atmos_audio_delay_label">إزاحة صوت Dolby Atmos</string>
+    <string name="audio_type_delay_active">فعّال للمسار المختار • محفوظ لهذا البروفايل</string>
+    <string name="audio_type_delay_inactive">غير فعّال للمسار الصوتي المختار</string>
+    <string name="offline_watched_percent">تمت مشاهدة %1$d%%</string>
+</resources>

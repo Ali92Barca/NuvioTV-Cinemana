@@ -1,0 +1,12 @@
+<resources>
+    <string name="offline_library_empty">No downloads yet</string>
+    <string name="offline_episode_count">Episodes: %1$d</string>
+    <string name="offline_season_episode">Season %1$d · Episode %2$d</string>
+    <string name="offline_ready">Downloaded</string>
+    <string name="offline_missing">File unavailable</string>
+    <string name="offline_failed">Download failed</string>
+    <string name="offline_subtitles_pending">Preparing subtitles</string>
+    <string name="offline_downloading">Downloading · %1$d MB</string>
+    <string name="offline_play">Play</string>
+    <string name="offline_delete_title">Delete this download?</string>
+</resources>

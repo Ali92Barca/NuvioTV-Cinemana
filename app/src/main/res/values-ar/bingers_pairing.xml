@@ -1,0 +1,21 @@
+<resources>
+    <string name="bingers_connected">مرتبط</string>
+    <string name="bingers_disconnected">غير مرتبط</string>
+    <string name="bingers_connected_subtitle">إدارة الحساب ومزامنة المشاهدات</string>
+    <string name="bingers_connect_subtitle">اربط حسابك من الموبايل باستخدام الباركود</string>
+    <string name="bingers_link_success">تم ربط حساب Bingers بنجاح</string>
+    <string name="bingers_sync_title">مزامنة المشاهدات</string>
+    <string name="bingers_sync_subtitle">تسجيل المشاهدة عند إكمال 80٪ من الفيديو</string>
+    <string name="bingers_retry">إعادة محاولة المزامنة</string>
+    <string name="bingers_queue">قيد الانتظار: %1$d · غير مطابق: %2$d</string>
+    <string name="bingers_disconnect">فصل الحساب</string>
+    <string name="bingers_phone_instructions">صوّر الباركود بالموبايل، واطلب رابط دخول Bingers، ثم الصقه في الصفحة واضغط إرسال ليُربط الحساب على التلفزيون.</string>
+    <string name="bingers_qr_description">باركود ربط Bingers</string>
+    <string name="bingers_same_network">أبقِ هذه النافذة مفتوحة. الموبايل والتلفزيون على نفس الشبكة. تنتهي صلاحية الباركود بعد 10 دقائق.</string>
+    <string name="bingers_preparing">جاري تجهيز الاتصال…</string>
+    <string name="bingers_linking">جاري ربط الحساب…</string>
+    <string name="bingers_new_qr">باركود جديد</string>
+    <string name="bingers_close">إغلاق</string>
+    <string name="bingers_pairing_expired">انتهت جلسة الربط. أنشئ باركوداً جديداً.</string>
+    <string name="bingers_pairing_network_error">تأكد من اتصال التلفزيون بالشبكة ثم أنشئ باركوداً جديداً.</string>
+</resources>
