@@ -188,7 +188,7 @@ android {
 
         // In-app updater (GitHub Releases)
         buildConfigField("String", "GITHUB_OWNER", "\"Ali92Barca\"")
-        buildConfigField("String", "GITHUB_REPO", "\"NuvioTV-Cinemana\"")
+        buildConfigField("String", "GITHUB_REPO", "\"NuvioTV-Cinemana-Releases\"")
         buildConfigField("String", "UPSTREAM_NUVIO_VERSION", "\"1.1.0-beta.9\"")
         buildConfigField("String", "UPSTREAM_NUVIO_COMMIT", "\"fa194b008e331780d2391491879e4a0a343641ef\"")
     }
@@ -409,7 +409,7 @@ composeCompiler {
     stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose_stability_config.conf"))
 }
 
-// Globally exclude stock media3 modules — replaced by local :nuvio-exoplayer-engine module
+// Globally exclude stock media3 modules â€” replaced by local :nuvio-exoplayer-engine module
 configurations.all {
     exclude(group = "androidx.media3", module = "media3-exoplayer")
     exclude(group = "androidx.media3", module = "media3-common")
@@ -512,7 +512,7 @@ dependencies {
     // ViewModel
     implementation(libs.lifecycle.viewmodel.compose)
 
-    // Media3 — remaining stock modules from Maven (not forked)
+    // Media3 â€” remaining stock modules from Maven (not forked)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.exoplayer.dash)
     implementation(libs.media3.exoplayer.smoothstreaming)
