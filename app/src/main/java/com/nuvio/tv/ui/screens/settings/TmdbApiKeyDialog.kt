@@ -17,7 +17,7 @@ import com.nuvio.tv.R
 import com.nuvio.tv.ui.components.NuvioDialog
 
 @Composable
-internal fun TmdbApiKeyDialog(currentValue: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun TmdbApiKeyDialog(currentValue: String, onSave: (String) -> Unit, onDismiss: () -> Unit, onQrRequested: (() -> Unit)? = null) {
     var value by remember(currentValue) { mutableStateOf(currentValue) }
     NuvioDialog(
         title = stringResource(R.string.tmdb_api_key_title),
@@ -37,6 +37,9 @@ internal fun TmdbApiKeyDialog(currentValue: String, onSave: (String) -> Unit, on
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Button(onClick = { onSave(value.trim()) }) { Text(stringResource(R.string.action_save)) }
             Button(onClick = { onSave("") }) { Text(stringResource(R.string.tmdb_api_key_reset)) }
+            if (onQrRequested != null) {
+                Button(onClick = onQrRequested) { Text(stringResource(R.string.tmdb_api_key_qr)) }
+            }
             Button(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         }
     }

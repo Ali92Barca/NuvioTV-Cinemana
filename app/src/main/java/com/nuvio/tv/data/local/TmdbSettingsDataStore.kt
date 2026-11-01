@@ -74,6 +74,10 @@ class TmdbSettingsDataStore @Inject constructor(
         store().edit { it[apiKeyKey] = value.trim() }
     }
 
+    suspend fun setApiKeyForProfile(profileId: Int, value: String) {
+        store(profileId).edit { it[apiKeyKey] = value.trim() }
+    }
+
     suspend fun setEnabled(enabled: Boolean) {
         store().edit { it[enabledKey] = enabled }
     }

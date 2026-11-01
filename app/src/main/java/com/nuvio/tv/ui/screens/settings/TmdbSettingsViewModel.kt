@@ -1,5 +1,14 @@
 package com.nuvio.tv.ui.screens.settings
 
+import android.content.Context
+import com.nuvio.tv.core.server.DeviceIpAddress
+import com.nuvio.tv.core.server.TmdbKeyPairingServer
+import com.nuvio.tv.core.profile.ProfileManager
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nuvio.tv.data.local.TmdbSettingsDataStore
@@ -19,6 +28,8 @@ import javax.inject.Inject
 @HiltViewModel
 class TmdbSettingsViewModel @Inject constructor(
     private val dataStore: TmdbSettingsDataStore,
+    private val profileManager: ProfileManager,
+    @ApplicationContext private val context: Context,
     private val trailerService: TrailerService,
     private val metaRepository: MetaRepository,
     private val cwEnrichmentCache: ContinueWatchingEnrichmentCache
@@ -71,6 +82,125 @@ class TmdbSettingsViewModel @Inject constructor(
         }
     }
 
+
+    data class QrPairingState(
+        val url: String? = null,
+        val loading: Boolean = false,
+        val pendingKey: String? = null,
+        val error: String? = null
+    )
+
+    val qrPairing = MutableStateFlow(QrPairingState())
+    private var pairingServer: TmdbKeyPairingServer? = null
+    private var pairingProfileId: Int? = null
+    private var pairingExpiry: Job? = null
+    @Volatile private var pairingGeneration = 0L
+
+    fun startQrPairing() {
+        stopQrPairing()
+        val ticket = pairingGeneration
+        val profileId = profileManager.activeProfileId.value
+        pairingProfileId = profileId
+        qrPairing.value = QrPairingState(loading = true)
+
+        viewModelScope.launch(Dispatchers.IO) {
+            var created: TmdbKeyPairingServer? = null
+            try {
+                val ip = DeviceIpAddress.get(context) ?: error("No local network")
+                val candidate = TmdbKeyPairingServer(
+                    stillCurrent = {
+                        pairingGeneration == ticket &&
+                            profileManager.activeProfileId.value == profileId
+                    },
+                    onKeyProposed = { key ->
+                        synchronized(this@TmdbSettingsViewModel) {
+                            if (pairingGeneration != ticket ||
+                                profileManager.activeProfileId.value != profileId ||
+                                qrPairing.value.pendingKey != null
+                            ) {
+                                false
+                            } else {
+                                qrPairing.value = qrPairing.value.copy(pendingKey = key)
+                                true
+                            }
+                        }
+                    }
+                )
+                created = candidate
+                candidate.start(5_000, false)
+
+                synchronized(this@TmdbSettingsViewModel) {
+                    if (pairingGeneration != ticket ||
+                        profileManager.activeProfileId.value != profileId
+                    ) {
+                        candidate.stop()
+                        return@launch
+                    }
+
+                    pairingServer = candidate
+                    qrPairing.value = QrPairingState(url = candidate.pairingUrl(ip))
+                    pairingExpiry = viewModelScope.launch {
+                        repeat(300) {
+                            delay(1_000)
+                            if (!isActive || pairingGeneration != ticket) return@launch
+                            if (profileManager.activeProfileId.value != profileId) {
+                                stopQrPairing()
+                                return@launch
+                            }
+                        }
+                        if (pairingGeneration == ticket) {
+                            stopQrPairing()
+                            qrPairing.value = QrPairingState(error = "QR session expired")
+                        }
+                    }
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                created?.stop()
+                throw error
+            } catch (_: Exception) {
+                created?.stop()
+                if (pairingGeneration == ticket) {
+                    qrPairing.value = QrPairingState(error = "Cannot start local QR server")
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    fun stopQrPairing() {
+        pairingGeneration++
+        pairingExpiry?.cancel()
+        pairingExpiry = null
+        pairingServer?.stop()
+        pairingServer = null
+        pairingProfileId = null
+        qrPairing.value = QrPairingState()
+    }
+
+    @Synchronized
+    fun confirmQrKey() {
+        val pending = qrPairing.value.pendingKey ?: return
+        val expectedProfile = pairingProfileId ?: return
+
+        if (profileManager.activeProfileId.value != expectedProfile) {
+            stopQrPairing()
+            return
+        }
+
+        stopQrPairing()
+        viewModelScope.launch {
+            if (profileManager.activeProfileId.value != expectedProfile) return@launch
+            dataStore.setApiKeyForProfile(expectedProfile, pending)
+            trailerService.clearCache()
+            metaRepository.clearCache()
+            cwEnrichmentCache.clearAll()
+        }
+    }
+
+    override fun onCleared() {
+        stopQrPairing()
+        super.onCleared()
+    }
     private fun update(action: suspend () -> Unit) {
         viewModelScope.launch { action() }
     }

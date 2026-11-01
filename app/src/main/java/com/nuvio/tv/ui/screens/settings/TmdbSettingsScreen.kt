@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,6 +55,17 @@ fun TmdbSettingsContent(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showApiKeyDialog by remember { mutableStateOf(false) }
+    var showQrPairingDialog by remember { mutableStateOf(false) }
+    val qrPairingState by viewModel.qrPairing.collectAsStateWithLifecycle()
+
+    DisposableEffect(showQrPairingDialog) {
+        if (showQrPairingDialog) {
+            viewModel.startQrPairing()
+        }
+        onDispose {
+            viewModel.stopQrPairing()
+        }
+    }
     var showLanguageDialog by remember { mutableStateOf(false) }
 
     Column(
@@ -271,10 +283,26 @@ fun TmdbSettingsContent(
         TmdbApiKeyDialog(
             currentValue = uiState.apiKey,
             onSave = { viewModel.onEvent(TmdbSettingsEvent.SetApiKey(it)); showApiKeyDialog = false },
-            onDismiss = { showApiKeyDialog = false }
+            onDismiss = { showApiKeyDialog = false },
+            onQrRequested = {
+                showApiKeyDialog = false
+                showQrPairingDialog = true
+            }
         )
     }
 
+    if (showQrPairingDialog) {
+        TmdbQrPairingDialog(
+            state = qrPairingState,
+            onConfirm = {
+                viewModel.confirmQrKey()
+                showQrPairingDialog = false
+            },
+            onDismiss = {
+                showQrPairingDialog = false
+            }
+        )
+    }
     if (showLanguageDialog) {
         LanguageSelectionDialog(
             title = stringResource(R.string.tmdb_language_dialog_title),

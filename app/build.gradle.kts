@@ -273,7 +273,7 @@ android {
             buildConfigField("boolean", "IS_DEBUG_BUILD", "false")
             buildConfigField("String", "SENTRY_ENVIRONMENT", buildConfigString("production"))
             // Private developer credentials belong in runtime settings, never public APKs.
-            buildConfigField("String", "TMDB_API_KEY", buildConfigString(""))
+            buildConfigField("String", "TMDB_API_KEY", buildConfigString(localProperties.getProperty("TMDB_API_KEY", "")))
             buildConfigField("String", "TRAKT_CLIENT_SECRET", buildConfigString(""))
 
             // Production environment (from local.properties)
