@@ -1,0 +1,64 @@
+name: Better Stream full debug with services
+on:
+  push:
+    branches: [experimental/betterstream-tmdb]
+    paths:
+      - '.github/workflows/betterstream-full-debug.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Configure registered services
+        env:
+          REQUIRE_REGISTRATIONS: 'true'
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+          TRAKT_REDIRECT_URI: ${{ secrets.TRAKT_REDIRECT_URI }}
+          SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          NUVIO_SUPABASE_URL: ${{ secrets.NUVIO_SUPABASE_URL }}
+          NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
+          NUVIO_SUPABASE_FALLBACK_URL: ${{ secrets.NUVIO_SUPABASE_FALLBACK_URL }}
+        run: python3 scripts/configure-services.py local.properties
+      - name: Generate and verify full debug configuration
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:generateFullDebugBuildConfig --no-daemon
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = next(Path('app/build/generated/source/buildConfig').rglob('BuildConfig.java')).read_text()
+          required = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'TRAKT_CLIENT_ID', 'SIMKL_CLIENT_ID', 'TMDB_API_KEY']
+          for key in required:
+              match = re.search(r'\b' + key + r'\s*=\s*"([^"]*)"', text)
+              if not match or not match[1].strip():
+                  raise SystemExit('Missing generated service configuration: ' + key)
+              print(key + ': configured')
+          PY
+      - name: Test integrations and build full APK
+        run: |
+          ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.tv.data.iptv.*' --tests 'com.nuvio.tv.data.repository.StreamRepositoryPluginIsolationTest' --tests 'com.nuvio.tv.data.repository.SharedPlaybackIdentityTest' --tests 'com.nuvio.tv.data.repository.WatchProgressRepositoryProfileIsolationTest' --tests 'com.nuvio.tv.data.repository.TraktAuthServiceTest' :app:assembleFullDebug --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BetterStream-full-debug-services
+          path: app/build/outputs/apk/full/debug/app-full-universal-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: BetterStream-service-test-results
+          path: app/build/test-results/testFullDebugUnitTest/*.xml
+      - name: Remove temporary service properties
+        if: always()
+        run: rm -f local.properties local.dev.properties
