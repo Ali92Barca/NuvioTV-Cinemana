@@ -1,6 +1,7 @@
 package com.nuvio.tv.data.iptv
 
 import com.nuvio.tv.BuildConfig
+import com.nuvio.tv.core.util.isEpisodeReleaseAired
 import com.nuvio.tv.data.remote.api.AddonApi
 import com.nuvio.tv.data.remote.api.TmdbApi
 import com.nuvio.tv.data.remote.dto.MetaPreviewDto
@@ -88,13 +89,17 @@ class ExternalAddonBridge @Inject constructor(
                 val partParent = isPartParent(candidate)
                 if (!partParent && (conflicts(info.imdbId, native.imdbId) || conflicts(info.tmdbId, native.tmdbId))) return@mapNotNull null
                 val nativeSeason = if (partParent) part!!.second else season
-                val expectedSeason = canonical.videos.filter { it.season == season }
+                val completeSeason = canonical.videos.filter { it.season == season }
                 val nativeSeasonVideos = native.videos.orEmpty().filter { it.season == nativeSeason }
-                val expectedNumbers = expectedSeason.mapNotNull { it.episode }.toSet()
+                val completeNumbers = completeSeason.mapNotNull { it.episode }.toSet()
                 val nativeNumbers = nativeSeasonVideos.mapNotNull { it.episode }.toSet()
+                val airedSeason = completeSeason.filter { it.available != false && isEpisodeReleaseAired(it.released) != false }
+                val airedNumbers = airedSeason.mapNotNull { it.episode }.toSet()
+                val expectedSeason = if (!info.arabic && completeNumbers != nativeNumbers && airedNumbers == nativeNumbers) airedSeason else completeSeason
+                val expectedNumbers = expectedSeason.mapNotNull { it.episode }.toSet()
                 // The owner permits ar works to bypass edition/count checks. Identity and
                 // an existing, unique native episode are still required. Part mapping is separate.
-                if (!acceptsLayout(if (info.arabic) "ar" else null, expectedNumbers, nativeNumbers)) return@mapNotNull null
+                if (!acceptsLayout(if (info.arabic) "ar" else null, completeNumbers, nativeNumbers, airedNumbers)) return@mapNotNull null
                 val video = nativeSeasonVideos.singleOrNull { it.episode == episode } ?: return@mapNotNull null
                 if (!compatible(expected, video, info.arabic, expectedNumbers.size)) return@mapNotNull null
                 val canonicalId = info.imdbId?.takeIf { Regex("tt[0-9]+").matches(it) }
@@ -110,8 +115,8 @@ class ExternalAddonBridge @Inject constructor(
             }.distinct()
         } ?: emptyList()
 
-    internal fun acceptsLayout(originalLanguage: String?, expected: Set<Int>, actual: Set<Int>) =
-        originalLanguage == "ar" || expected == actual
+    internal fun acceptsLayout(originalLanguage: String?, expected: Set<Int>, actual: Set<Int>, aired: Set<Int> = expected) =
+        originalLanguage == "ar" || expected == actual || (aired.isNotEmpty() && aired == actual && expected.containsAll(aired))
 
     internal fun compatible(expected: Video, actual: VideoDto, arabic: Boolean, count: Int): Boolean {
         if (actual.id.isBlank()) return false
@@ -152,11 +157,15 @@ class ExternalAddonBridge @Inject constructor(
                 identities.learnExternalCanonical(match.tmdbId.toString(), imdb)
                 val verified = mutableSetOf<String>()
                 for ((season, videos) in native.videos.filter { (it.season ?: 0) > 0 }.groupBy { it.season!! }.entries.take(30)) {
-                    val expected = api.getTvSeasonDetails(match.tmdbId, season, BuildConfig.TMDB_API_KEY, "ar-SA")
+                    val complete = api.getTvSeasonDetails(match.tmdbId, season, BuildConfig.TMDB_API_KEY, "ar-SA")
                         .body()?.episodes ?: continue
                     val sourceNumbers = videos.mapNotNull { it.episode }.toSet()
+                    val completeNumbers = complete.mapNotNull { it.episodeNumber }.toSet()
+                    val aired = complete.filter { isEpisodeReleaseAired(it.airDate) != false }
+                    val airedNumbers = aired.mapNotNull { it.episodeNumber }.toSet()
+                    val expected = if (!arabic && completeNumbers != sourceNumbers && airedNumbers == sourceNumbers) aired else complete
                     val expectedNumbers = expected.mapNotNull { it.episodeNumber }.toSet()
-                    if (!acceptsLayout(details.originalLanguage, expectedNumbers, sourceNumbers)) continue
+                    if (!acceptsLayout(details.originalLanguage, completeNumbers, sourceNumbers, airedNumbers)) continue
                     val verifiedSeason = mutableListOf<Triple<Int, String, Int>>()
                     for (item in expected) {
                         val number = item.episodeNumber ?: continue

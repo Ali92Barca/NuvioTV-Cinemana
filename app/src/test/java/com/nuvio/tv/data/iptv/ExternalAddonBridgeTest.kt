@@ -14,6 +14,8 @@ class ExternalAddonBridgeTest {
         assertTrue(bridge.acceptsLayout("ar", setOf(1, 2), setOf(1, 2, 3, 4)))
         assertFalse(bridge.acceptsLayout("tr", setOf(1, 2), setOf(1, 2, 3, 4)))
         assertTrue(bridge.acceptsLayout("tr", setOf(1, 2), setOf(1, 2)))
+        assertTrue(bridge.acceptsLayout("tr", (1..35).toSet(), (1..8).toSet(), (1..8).toSet()))
+        assertFalse(bridge.acceptsLayout("tr", (1..35).toSet(), (1..7).toSet(), (1..8).toSet()))
         val expected = episodes().first().copy(released = "2026-01-01")
         val actual = VideoDto("xt_s_src_42:1:1", title = "Different title", released = "2025-01-01", season = 1, episode = 1)
         assertTrue(bridge.compatible(expected, actual, arabic = true, count = 2))
