@@ -4,6 +4,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ExternalAddonTitleMatcherTest {
+    @Test fun bilingualTitleMatchesCompleteArabicNameButNotSubstring() {
+        val translated = candidate(name = "Uzak Şehir المدينة البعيدة", year = 2024)
+        assertTrue(ExternalAddonTitleMatcher.choose(listOf("المدينة البعيدة"), 2024, listOf(translated)) is
+            ExternalAddonTitleMatcher.Decision.Matched)
+        assertEquals(ExternalAddonTitleMatcher.Decision.NoMatch,
+            ExternalAddonTitleMatcher.choose(listOf("المدينة البعيدة"), 2024,
+                listOf(candidate(name = "حكاية المدينة البعيدة", year = 2024))))
+    }
+    @Test fun numberedPartIsNotSilentlyReducedToBaseTitle() {
+        assertEquals(ExternalAddonTitleMatcher.Decision.NoMatch,
+            ExternalAddonTitleMatcher.choose(listOf("ليل البنفسج 2"), null,
+                listOf(candidate(name = "ليل البنفسج", year = null))))
+    }
     private fun candidate(id: String = "xtream:42", name: String = "A Different World", year: Int? = 1987,
                           imdb: String? = null, tmdb: String? = null) =
         ExternalAddonTitleMatcher.Candidate(id, name, year, imdb, tmdb)

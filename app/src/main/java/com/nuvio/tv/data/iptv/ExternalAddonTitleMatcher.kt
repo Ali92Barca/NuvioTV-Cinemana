@@ -52,7 +52,7 @@ internal object ExternalAddonTitleMatcher {
                     expectedImdbId.equals(candidate.imdbId, ignoreCase = true)
                 val tmdbExact = !expectedTmdbId.isNullOrBlank() &&
                     expectedTmdbId == candidate.tmdbId
-                val nameExact = candidateName in normalizedNames
+                val nameExact = titleVariants(candidate.name).any { it in titles.flatMap(::titleVariants).toSet() }
                 // Do not accept substring-only matches: same-name shows across regions
                 // and editions are common, and often share a release year.
                 if (!nameExact && !imdbExact && !tmdbExact) return@mapNotNull null
@@ -86,5 +86,15 @@ internal object ExternalAddonTitleMatcher {
             .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
             .trim()
         return cleaned.replace(Regex("\\s+"), " ")
+    }
+
+    /** A bilingual label can carry two complete titles; never use arbitrary substrings. */
+    internal fun titleVariants(value: String): Set<String> {
+        val normalized = normalize(value)
+        val arabic = Regex("[\\p{IsArabic}\\p{N}]+(?:\\s+[\\p{IsArabic}\\p{N}]+)*").findAll(normalized)
+            .map { it.value }.filter { it.length >= 4 && Regex("\\p{IsArabic}").containsMatchIn(it) }.toList()
+        val latin = Regex("[\\p{IsLatin}\\p{N}]+(?:\\s+[\\p{IsLatin}\\p{N}]+)*").findAll(normalized)
+            .map { it.value }.filter { it.length >= 4 && Regex("\\p{IsLatin}").containsMatchIn(it) }.toList()
+        return (listOf(normalized) + arabic + latin).filter(String::isNotBlank).toSet()
     }
 }

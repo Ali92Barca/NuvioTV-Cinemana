@@ -38,6 +38,34 @@ import org.junit.Test
 import retrofit2.Response
 
 class StreamRepositoryPluginIsolationTest {
+    @Test fun `nonempty direct IPTV links do not suppress verified native edition search`() = runTest {
+        val addon = compatibleAddon().copy(
+            catalogs = listOf(com.nuvio.tv.domain.model.CatalogDescriptor(com.nuvio.tv.domain.model.ContentType.SERIES,
+                id = "search", name = "Search", extra = listOf(com.nuvio.tv.domain.model.CatalogExtra("search")))),
+            resources = listOf(AddonResource("stream", listOf("series"), listOf("tt", "xt_"))))
+        val canonical = mockk<com.nuvio.tv.domain.model.Meta> {
+            every { name } returns "Series"
+            every { releaseInfo } returns "2020"
+            every { released } returns null
+            every { imdbId } returns "tt101"
+            every { tmdbId } returns "9"
+            every { videos } returns (1..2).map { com.nuvio.tv.domain.model.Video("tt101:1:$it", "Episode $it",
+                null, null, season = 1, episode = it, overview = null) }
+        }
+        val harness = newHarness(emptyList(), addon, canonical)
+        coEvery { harness.api.getCatalog(any()) } returns Response.success(com.nuvio.tv.data.remote.dto.CatalogResponseDto(listOf(
+            com.nuvio.tv.data.remote.dto.MetaPreviewDto("xt_s_src_42", "series", "Series", releaseInfo = "2020"))))
+        coEvery { harness.api.getMeta(any()) } returns Response.success(com.nuvio.tv.data.remote.dto.MetaResponseDto(
+            com.nuvio.tv.data.remote.dto.MetaDto("xt_s_src_42", "series", "Series", videos = (1..2).map {
+                com.nuvio.tv.data.remote.dto.VideoDto("xt_s_src_42:1:$it", title = "Episode $it", season = 1, episode = it)
+            })))
+        coEvery { harness.api.getStreams(match { it.contains("xt_s_src_42") }) } returns Response.success(
+            StreamResponseDto(streams = listOf(StreamDto(name = "Translated", url = "https://stream.example/translated.m3u8"))))
+        val results = harness.repository.getStreamsFromAllAddons("series", "tt101:1:1", 1, 1).toList()
+        val groups = (results.last() as NetworkResult.Success).data
+        assertEquals(listOf("https://stream.example/translated.m3u8"), groups.flatMap { it.streams }.map { it.url })
+        coVerify(exactly = 1) { harness.api.getCatalog(any()) }
+    }
     @Test
     fun `addon results arrive while plugin TMDB lookup is pending`() = runBlocking {
         val harness = newHarness(listOf(compatibleScraper()))
@@ -171,8 +199,8 @@ class StreamRepositoryPluginIsolationTest {
         assertTrue(groups.single { it.addonName == "Fast Addon" }.streams.all { it.pluginSourceName == null })
     }
 
-    private fun newHarness(enabledScrapers: List<ScraperInfo>): Harness {
-        val addon = compatibleAddon()
+    private fun newHarness(enabledScrapers: List<ScraperInfo>, addon: Addon = compatibleAddon(),
+        canonical: com.nuvio.tv.domain.model.Meta? = null): Harness {
         val api = mockk<AddonApi>()
         coEvery { api.getStreams(any()) } returns Response.success(
             StreamResponseDto(
@@ -225,7 +253,7 @@ class StreamRepositoryPluginIsolationTest {
                 debridStreamPresentation = presentation,
                 localDebridAvailabilityService = availability,
                 externalAddonBridge = com.nuvio.tv.data.iptv.ExternalAddonBridge(api),
-                metaRepository = mockk(relaxed = true),
+                metaRepository = mockk(relaxed = true) { every { getCachedMeta(any(), any()) } returns canonical },
                 serverStreams = mockk {
                     every { isNativeRequest(any()) } returns false
                     every { revision } returns 0

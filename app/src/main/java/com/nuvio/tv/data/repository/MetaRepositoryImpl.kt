@@ -42,7 +42,8 @@ class MetaRepositoryImpl @Inject constructor(
     private val api: AddonApi,
     private val addonRepository: AddonRepository,
     private val serverCatalog: ServerCatalog,
-    private val builtinDetails: BuiltinDetailsStore? = null
+    private val builtinDetails: BuiltinDetailsStore? = null,
+    private val externalBridge: com.nuvio.tv.data.iptv.ExternalAddonBridge? = null
 ) : MetaRepository {
     companion object {
         private const val TAG = "MetaRepository"
@@ -244,7 +245,8 @@ class MetaRepositoryImpl @Inject constructor(
                         val metaDto = if (false && isNuvioBuiltInSource(addonBaseUrl)) {
                             enrichBuiltInMetadata(sourceMetaDto, requestedType)
                         } else sourceMetaDto
-                        val meta = metaDto.toDomain(context.getString(R.string.episodes_episode))
+                        val rawMeta = metaDto.toDomain(context.getString(R.string.episodes_episode))
+                        val meta = if (addon != null) externalBridge?.enrichNative(addon, rawMeta) ?: rawMeta else rawMeta
                         if (snapshotKey != null) builtinDetails?.saveSnapshot(snapshotKey, metaDto)
                         val ttlMs = parseMaxAgeMs(response.headers()["Cache-Control"])
                         val cached = CachedMeta(meta, System.currentTimeMillis() + ttlMs)
@@ -373,7 +375,8 @@ class MetaRepositoryImpl @Inject constructor(
                         val metaDto = response.body()?.meta
                         if (metaDto != null) {
                             val episodeLabel = context.getString(R.string.episodes_episode)
-                            val meta = metaDto.toDomain(episodeLabel)
+                            val rawMeta = metaDto.toDomain(episodeLabel)
+                            val meta = externalBridge?.enrichNative(addon, rawMeta) ?: rawMeta
                             val ttlMs = parseMaxAgeMs(response.headers()["Cache-Control"])
                             val cached = CachedMeta(meta, System.currentTimeMillis() + ttlMs)
                             addonMetaCache[cacheKey] = cached
@@ -446,7 +449,8 @@ class MetaRepositoryImpl @Inject constructor(
                             if (response.isSuccessful) {
                                 val metaDto = response.body()?.meta
                                 if (metaDto != null) {
-                                    val meta = metaDto.toDomain(context.getString(R.string.episodes_episode))
+                                    val rawMeta = metaDto.toDomain(context.getString(R.string.episodes_episode))
+                        val meta = if (addon != null) externalBridge?.enrichNative(addon, rawMeta) ?: rawMeta else rawMeta
                                     val ttlMs = parseMaxAgeMs(response.headers()["Cache-Control"])
                                     val cached = CachedMeta(meta, System.currentTimeMillis() + ttlMs)
                                     addonMetaCache[cacheKey] = cached
@@ -567,7 +571,8 @@ class MetaRepositoryImpl @Inject constructor(
                     val response = api.getMeta(url)
                     if (response.isSuccessful) {
                         val metaDto = response.body()?.meta ?: return@async null
-                        val meta = metaDto.toDomain(context.getString(R.string.episodes_episode))
+                        val rawMeta = metaDto.toDomain(context.getString(R.string.episodes_episode))
+                        val meta = if (addon != null) externalBridge?.enrichNative(addon, rawMeta) ?: rawMeta else rawMeta
                         val ttlMs = parseMaxAgeMs(response.headers()["Cache-Control"])
                         val cached = CachedMeta(meta, System.currentTimeMillis() + ttlMs)
                         primaryAddonMetaCache[cacheKey] = cached

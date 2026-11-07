@@ -233,15 +233,21 @@ class StreamRepositoryImpl @Inject constructor(
                             } else NetworkResult.Success(emptyList<Stream>())
                             val needsSearch = (directResult is NetworkResult.Success && directResult.data.isEmpty()) ||
                                 (directResult is NetworkResult.Error && directResult.code == 404)
-                            val streamsResult = if (needsSearch &&
+                            val searchNative = externalAddonBridge.isXtream(addon) && !requestedId.startsWith("xt_")
+                            val streamsResult = if ((needsSearch || searchNative) &&
                                 externalAddonBridge.supports(addon, type)) {
                                 val contentId = parentMetaId ?: if (type == "series" && season != null && episode != null)
                                     videoId.removeSuffix(":$season:$episode") else videoId
                                 val canonical = metaRepository.getCachedMeta(type, contentId)
                                     ?: metaRepository.getCachedBuiltinDetails(type, contentId)
-                                val nativeId = canonical?.let { externalAddonBridge.resolve(addon, type, it, season, episode) }
-                                if (nativeId != null && addon.supportsStreamResource(type, nativeId))
-                                    getStreamsFromAddon(addon, type, nativeId) else directResult
+                                if (canonical == null) directResult else {
+                                    val nativeIds = externalAddonBridge.resolveAll(addon, type, canonical, season, episode)
+                                    val verified = nativeIds.filter { addon.supportsStreamResource(type, it) }.flatMap { nativeId ->
+                                        (getStreamsFromAddon(addon, type, nativeId) as? NetworkResult.Success<List<Stream>>)?.data.orEmpty()
+                                    }
+                                    if (searchNative && type == "series") NetworkResult.Success(verified.distinctBy { it.url })
+                                    else NetworkResult.Success(((directResult as? NetworkResult.Success<List<Stream>>)?.data.orEmpty() + verified).distinctBy { it.url })
+                                }
                             } else directResult
                             when (streamsResult) {
                                 is NetworkResult.Success -> {

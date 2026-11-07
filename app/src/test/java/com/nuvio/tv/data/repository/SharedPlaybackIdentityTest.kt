@@ -48,6 +48,64 @@ class SharedPlaybackIdentityTest {
         assertEquals("tt1234", SharedPlaybackIdentity(context).canonical("cinemana:7"))
         assertEquals("cinemana:7", movie.id)
     }
+
+    @Test fun `one Xtream playlist can project two independent TMDB works and survives restart`() {
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode("https://example.test/private-one", native, "$native:1:1", 1, 1, "tt101", 1, 1)
+        registry.learnExternalEpisode("https://example.test/private-one", native, "$native:2:1", 2, 1, "tt202", 1, 1)
+        val first = registry.progress(progress(native, series = true))
+        val second = registry.progress(progress(native, series = true).copy(season = 2, videoId = "$native:2:1"))
+        assertEquals("tt101", first.contentId)
+        assertEquals("tt202", second.contentId)
+        assertEquals(1, second.season)
+        assertEquals("tt202:1:1", second.videoId)
+        val inverse = registry.progress(progress("tt202", series = true), native)
+        assertEquals(2, inverse.season)
+        assertEquals("$native:2:1", inverse.videoId)
+        assertEquals(native, registry.progress(progress(native, series = true).copy(season = 3)).contentId)
+        val restored = SharedPlaybackIdentity(context)
+        assertEquals("tt202", restored.progress(progress(native, series = true).copy(season = 2)).contentId)
+        assertFalse(values["external_episodes_v1"].orEmpty().contains("private-one"))
+    }
+
+    @Test fun `same Xtream id in two subscriptions requires matching source scope`() {
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode("https://example.test/account-a", native, "$native:1:1", 1, 1, "tt101", 1, 1)
+        registry.learnExternalEpisode("https://example.test/account-b", native, "$native:1:1", 1, 1, "tt202", 1, 1)
+        val raw = progress(native, series = true)
+        assertEquals(native, registry.progress(raw).contentId)
+        assertEquals("tt101", registry.progress(raw.copy(addonBaseUrl = "https://example.test/account-a")).contentId)
+        assertEquals("tt202", registry.progress(raw.copy(addonBaseUrl = "https://example.test/account-b")).contentId)
+        assertEquals(native, registry.progress(raw.copy(addonBaseUrl = "https://example.test/account-b"), "tt101").contentId)
+        assertEquals(native, registry.progress(raw, "tt101").contentId)
+        assertEquals("tt101", registry.progress(progress("tt101", series = true), native).contentId)
+    }
+
+    @Test fun `external canonical aliases join TMDB and IMDb without changing another work`() {
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode("https://example.test/a", native, "$native:1:1", 1, 1, "tmdb:tv:123", 1, 1)
+        registry.learnExternalCanonical("123", "tt101")
+        assertEquals("tt101", registry.progress(progress(native, series = true)).contentId)
+        assertEquals(native, registry.progress(progress("tmdb:123", series = true), native).contentId)
+        assertEquals("tt999", registry.progress(progress("tt999", series = true)).contentId)
+    }
+    @Test fun `Xtream episode reads and writes preserve explicit profile and part coordinates`() = runTest {
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode("https://example.test/a", native, "$native:2:1", 2, 1, "tt202", 1, 1)
+        val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
+        val repo = repository(backend)
+        every { backend.getEpisodeProgress(any(), any(), any(), any<Int>()) } answers {
+            val found = firstArg<String>() == "tt202" && secondArg<Int>() == 1 && thirdArg<Int>() == 1 && arg<Int>(3) == 5
+            flowOf(if (found) progress("tt202", series = true) else null)
+        }
+        val projected = repo.getEpisodeProgress(native, 2, 1, 5).first()
+        assertEquals(native, projected?.contentId)
+        assertEquals(2, projected?.season)
+        assertNull(repo.getEpisodeProgress(native, 2, 1, 6).first())
+        repo.saveProgress(progress(native, series = true).copy(season = 2, videoId = "$native:2:1"), 5, false)
+        coVerify(exactly = 1) { backend.saveProgress(match { it.contentId == "tt202" && it.season == 1 && it.episode == 1 }, 5, false) }
+        verify(exactly = 0) { backend.getEpisodeProgress("tt202", 2, 1, any<Int>()) }
+    }
     @Test fun `a series match without verified episode compatibility remains independent`() {
         registry.learn(meta("cinemana-series:7", series = true), "tt1234")
         assertEquals("cinemana-series:7", registry.canonical("cinemana-series:7"))
