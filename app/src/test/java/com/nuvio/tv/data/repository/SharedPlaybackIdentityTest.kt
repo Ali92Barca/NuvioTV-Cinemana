@@ -246,8 +246,10 @@ class SharedPlaybackIdentityTest {
     @Test fun `a new episode outside the verified coordinate map remains independent`() {
         registry.learn(meta("cinemana-series:7", series = true, safe = true), "tt1234")
         registry.learnExternalEpisode("https://example.test/a", "xt_s_src_42", "xt_s_src_42:1:1", 1, 1, "tt1234", 1, 1)
+        registry.learnExternalEpisode("https://example.test/a", "xt_s_src_42", "xt_s_src_42:1:2", 1, 2, "tt1234", 1, 2)
         val next = progress("cinemana-series:7", series = true).copy(episode = 2)
         assertEquals("cinemana-series:7", registry.progress(next).contentId)
+        assertEquals("cinemana-series:7", registry.progress(next, "xt_s_src_42").contentId)
         val external = progress("tt1234", series = true).copy(episode = 2)
         assertEquals("tt1234", registry.progress(external, "cinemana-series:7").contentId)
         assertFalse(registry.canProjectEpisode("cinemana-series:7", "tt1234", 1, 2))

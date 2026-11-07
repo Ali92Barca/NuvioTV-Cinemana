@@ -83,8 +83,14 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
             val anchor = canonical.takeIf(::nativePlaybackId)?.takeIf { this.canonical(it, true) == it }
                 ?: existing.first().canonical.takeIf(::nativePlaybackId)?.takeIf { this.canonical(it, true) == it }
             val destination = if (anchor == canonical) previous else next
-            if (anchor != null && anchor != destination && !externalCanonicalLinks.containsKey(anchor)) {
+            val sameCoordinates = existing.first().canonicalSeason == canonicalSeason && existing.first().canonicalEpisode == canonicalEpisode
+            if (sameCoordinates && anchor != null && anchor != destination && !externalCanonicalLinks.containsKey(anchor)) {
                 externalCanonicalLinks[anchor] = destination
+                changed = true
+            }
+            if (sameCoordinates && nativePlaybackId(canonical) && existing.none { it.canonical == canonical } &&
+                externalCanonical(canonical) == previous) {
+                externalRows += row
                 changed = true
             }
             continue
@@ -209,12 +215,14 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     }
     @Synchronized internal fun progress(value: WatchProgress, requestedTarget: String? = null): WatchProgress {
         if (requestedTarget?.startsWith("xt_") == true) {
-            val projected = externalProgress(progress(value), requestedTarget)
+            val normalized = progress(value)
+            if (entries.value.any { it.native == value.contentId } && normalized.contentId == value.contentId) return value
+            val projected = externalProgress(normalized, requestedTarget)
             return if (projected.contentId == requestedTarget) projected else value
         }
         val input = if (value.contentType in setOf("series", "tv") && !value.contentId.startsWith("xt_") &&
             (!nativePlaybackId(value.contentId) || (entries.value.none { it.native == value.contentId } &&
-                externalRows.any { externalCanonical(it.canonical) == externalCanonical(value.contentId) &&
+                externalRows.any { it.canonical == value.contentId &&
                     it.canonicalSeason == value.season && it.canonicalEpisode == value.episode })) &&
             externalRows.any { externalCanonical(it.canonical) == externalCanonical(value.contentId) }) {
             val id = externalCanonical(value.contentId)
