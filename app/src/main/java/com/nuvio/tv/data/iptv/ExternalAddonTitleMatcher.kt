@@ -91,10 +91,14 @@ internal object ExternalAddonTitleMatcher {
     /** A bilingual label can carry two complete titles; never use arbitrary substrings. */
     internal fun titleVariants(value: String): Set<String> {
         val normalized = normalize(value)
-        val arabic = Regex("[\\p{IsArabic}\\p{N}]+(?:\\s+[\\p{IsArabic}\\p{N}]+)*").findAll(normalized)
-            .map { it.value }.filter { it.length >= 4 && Regex("\\p{IsArabic}").containsMatchIn(it) }.toList()
-        val latin = Regex("[\\p{IsLatin}\\p{N}]+(?:\\s+[\\p{IsLatin}\\p{N}]+)*").findAll(normalized)
-            .map { it.value }.filter { it.length >= 4 && Regex("\\p{IsLatin}").containsMatchIn(it) }.toList()
+        // Android uses ICU regex, which rejects the JVM-only IsArabic/IsLatin aliases.
+        // Explicit script ranges work on both Android and the desktop test runtime.
+        val arabicLetters = "\\u0600-\\u06FF\\u0750-\\u077F\\u0870-\\u08FF"
+        val latinLetters = "a-z\\u00C0-\\u024F\\u1E00-\\u1EFF"
+        val arabic = Regex("[$arabicLetters\\p{N}]+(?:\\s+[$arabicLetters\\p{N}]+)*").findAll(normalized)
+            .map { it.value }.filter { it.length >= 4 && Regex("[$arabicLetters]").containsMatchIn(it) }.toList()
+        val latin = Regex("[$latinLetters\\p{N}]+(?:\\s+[$latinLetters\\p{N}]+)*").findAll(normalized)
+            .map { it.value }.filter { it.length >= 4 && Regex("[$latinLetters]").containsMatchIn(it) }.toList()
         return (listOf(normalized) + arabic + latin).filter(String::isNotBlank).toSet()
     }
 }
