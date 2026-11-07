@@ -7,14 +7,23 @@ import java.util.List;
 public final class ExternalMatcherProbe {
     private static Method find(Class<?> type, String prefix, int count) {
         for (Method method : type.getDeclaredMethods()) {
-            if (method.getName().startsWith(prefix) && !method.getName().contains("$default") && method.getParameterTypes().length == count) {
+            if (method.getName().startsWith(prefix) && !method.getName().contains("$default") &&
+                !java.lang.reflect.Modifier.isStatic(method.getModifiers()) && method.getParameterTypes().length == count) {
                 method.setAccessible(true);
                 return method;
             }
         }
         throw new IllegalStateException("Missing matcher method: " + prefix);
     }
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
+        try { run(args); }
+        catch (Throwable error) {
+            Throwable cause = error.getCause() == null ? error : error.getCause();
+            System.out.println("FAIL " + cause.getClass().getSimpleName() + ": " + cause.getMessage());
+            System.exit(1);
+        }
+    }
+    private static void run(String[] args) throws Exception {
         ClassLoader loader = "classpath".equals(args[0]) ? ExternalMatcherProbe.class.getClassLoader()
             : new dalvik.system.PathClassLoader(args[0], ExternalMatcherProbe.class.getClassLoader());
         Class<?> matcher = Class.forName("com.nuvio.tv.data.iptv.ExternalAddonTitleMatcher", true, loader);

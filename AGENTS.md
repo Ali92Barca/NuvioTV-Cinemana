@@ -6,4 +6,6 @@ Before delivering a new changed experimental APK, increment `experimentalTestNum
 
 Build the full distribution with registered Nuvio, Trakt, SIMKL, and TMDB service configuration. Use the experimental GitHub workflow to inject repository secrets; do not deliver a blank-service diagnostic APK as a functional test build. Keep credentials out of logs and source control.
 
+For title-matcher changes, run `tests/android-probes/ExternalMatcherProbe.java` against the final APK on Android as well as JVM tests. Android ICU rejects some regex properties accepted by desktop Java. Verify a canonical Nuvio stream request on the device before claiming the integration works; startup and unit tests alone do not establish that.
+
 For this Better Stream work, use only `experimental/betterstream-tmdb`, without modifying main or publishing a Release, unless the owner explicitly changes that scope.
