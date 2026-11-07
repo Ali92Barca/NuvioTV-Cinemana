@@ -39,13 +39,18 @@ internal object ExternalAddonTitleMatcher {
 
         val scored = candidates.asSequence()
             .filter { it.originalId.isNotBlank() }
-            .distinctBy { it.originalId }
+            .distinct()
             .mapNotNull { candidate ->
+                // Explicit identity conflicts must never be overridden by a title score.
+                if (!expectedImdbId.isNullOrBlank() && !candidate.imdbId.isNullOrBlank() &&
+                    !expectedImdbId.equals(candidate.imdbId, ignoreCase = true)) return@mapNotNull null
+                if (!expectedTmdbId.isNullOrBlank() && !candidate.tmdbId.isNullOrBlank() &&
+                    expectedTmdbId != candidate.tmdbId) return@mapNotNull null
                 val candidateName = normalize(candidate.name)
                 if (candidateName.isEmpty()) return@mapNotNull null
-                val imdbExact = expectedImdbId != null &&
+                val imdbExact = !expectedImdbId.isNullOrBlank() &&
                     expectedImdbId.equals(candidate.imdbId, ignoreCase = true)
-                val tmdbExact = expectedTmdbId != null &&
+                val tmdbExact = !expectedTmdbId.isNullOrBlank() &&
                     expectedTmdbId == candidate.tmdbId
                 val nameExact = candidateName in normalizedNames
                 // Do not accept substring-only matches: same-name shows across regions

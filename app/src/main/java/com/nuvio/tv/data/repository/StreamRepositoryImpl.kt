@@ -59,7 +59,9 @@ class StreamRepositoryImpl @Inject constructor(
     private val tmdbService: TmdbService,
     private val debridStreamPresentation: DebridStreamPresentation,
     private val localDebridAvailabilityService: LocalDebridAvailabilityService,
-    private val serverStreams: ServerStreams
+    private val serverStreams: ServerStreams,
+    private val externalAddonBridge: com.nuvio.tv.data.iptv.ExternalAddonBridge,
+    private val metaRepository: com.nuvio.tv.domain.repository.MetaRepository
 ) : StreamRepository {
     private val streamSearchSessions = StreamSearchSessionCache()
     private val localPluginSearchPaused = MutableStateFlow(false)
@@ -201,7 +203,7 @@ class StreamRepositoryImpl @Inject constructor(
                 val requestedId = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(
                     addon.id, type, videoId, parentMetaId, season, episode
                 )
-                addon.supportsStreamResource(type, requestedId)
+                addon.supportsStreamResource(type, requestedId) || externalAddonBridge.supports(addon, type)
             }
 
             val attemptedAddonNames = streamAddons.map { it.displayName } + serverSources.map { it.name }
@@ -226,7 +228,21 @@ class StreamRepositoryImpl @Inject constructor(
                     launch {
                         try {
                             val requestedId = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(addon.id, type, videoId, parentMetaId, season, episode)
-                            val streamsResult = getStreamsFromAddon(addon, type, requestedId)
+                            val directResult = if (addon.supportsStreamResource(type, requestedId)) {
+                                getStreamsFromAddon(addon, type, requestedId)
+                            } else NetworkResult.Success(emptyList<Stream>())
+                            val needsSearch = (directResult is NetworkResult.Success && directResult.data.isEmpty()) ||
+                                (directResult is NetworkResult.Error && directResult.code == 404)
+                            val streamsResult = if (needsSearch &&
+                                externalAddonBridge.supports(addon, type)) {
+                                val contentId = parentMetaId ?: if (type == "series" && season != null && episode != null)
+                                    videoId.removeSuffix(":$season:$episode") else videoId
+                                val canonical = metaRepository.getCachedMeta(type, contentId)
+                                    ?: metaRepository.getCachedBuiltinDetails(type, contentId)
+                                val nativeId = canonical?.let { externalAddonBridge.resolve(addon, type, it, season, episode) }
+                                if (nativeId != null && addon.supportsStreamResource(type, nativeId))
+                                    getStreamsFromAddon(addon, type, nativeId) else directResult
+                            } else directResult
                             when (streamsResult) {
                                 is NetworkResult.Success -> {
                                     if (streamsResult.data.isNotEmpty()) {
@@ -266,11 +282,11 @@ class StreamRepositoryImpl @Inject constructor(
                             }
                         } catch (e: Exception) {
                             if (e is CancellationException) throw e
-                            Log.e(TAG, "Addon ${addon.name} failed: ${e.message}")
+                            Log.e(TAG, "External addon request failed")
                             attemptedFailures += StreamAttemptFailure(
                                 addonName = addon.displayName,
                                 kind = StreamFailureKind.REQUEST_FAILED,
-                                detail = e.message ?: context.getString(com.nuvio.tv.R.string.stream_error_detail_addon_request_failed)
+                                detail = context.getString(com.nuvio.tv.R.string.stream_error_detail_addon_request_failed)
                             )
                         } finally {
                             if (completedJobs.incrementAndGet() >= totalJobs) {
@@ -705,7 +721,7 @@ class StreamRepositoryImpl @Inject constructor(
         val encodedType = encodePathSegment(type)
         val encodedVideoId = encodePathSegment(videoId)
         val streamUrl = "$basePath/stream/$encodedType/$encodedVideoId.json$baseQuery"
-        Log.d(TAG, "Fetching streams type=$type videoId=$videoId url=$streamUrl")
+        Log.d(TAG, "Fetching addon streams type=$type")
 
         // Display info comes from the installed addon the caller already holds. Calling
         // addonRepository.fetchAddon() here caused an unconditional manifest GET ahead of every
@@ -719,13 +735,13 @@ class StreamRepositoryImpl @Inject constructor(
                 val streams = result.data.streams?.map { 
                     it.toDomain(addonName, addonLogo) 
                 } ?: emptyList()
-                Log.d(TAG, "Streams success addon=$addonName count=${streams.size} url=$streamUrl")
+                Log.d(TAG, "Streams success count=${streams.size}")
                 NetworkResult.Success(streams)
             }
             is NetworkResult.Error -> {
                 Log.w(
                     TAG,
-                    "Streams failed addon=$addonName code=${result.code} message=${result.message} url=$streamUrl"
+                    "Addon streams failed code=${result.code}"
                 )
                 result
             }
@@ -775,7 +791,7 @@ class StreamRepositoryImpl @Inject constructor(
         val encodedType = encodePathSegment(type)
         val encodedMetaId = encodePathSegment(metaId)
         val metaUrl = "$basePath/meta/$encodedType/$encodedMetaId.json$baseQuery"
-        Log.d(TAG, "Fetching inline streams via meta type=$type metaId=$metaId videoId=$videoId url=$metaUrl")
+        Log.d(TAG, "Fetching inline streams type=$type")
         return try {
             when (val result = safeApiCall(context) { api.getMeta(metaUrl) }) {
                 is NetworkResult.Success -> {
@@ -791,7 +807,7 @@ class StreamRepositoryImpl @Inject constructor(
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.w(TAG, "Failed to fetch inline streams from meta for ${addon.displayName}: ${e.message}")
+            Log.w(TAG, "Failed to fetch addon inline streams")
             emptyList()
         }
     }
@@ -819,9 +835,8 @@ class StreamRepositoryImpl @Inject constructor(
                 context.getString(com.nuvio.tv.R.string.stream_error_detail_addon_cleartext_blocked)
             error.message.isBlank() ->
                 context.getString(com.nuvio.tv.R.string.stream_error_detail_addon_request_failed)
-            else -> error.message.replaceFirstChar { char ->
-                if (char.isLowerCase()) char.titlecase() else char.toString()
-            }
+            // Transport errors can contain full configured URLs and credentials.
+            else -> context.getString(com.nuvio.tv.R.string.stream_error_detail_addon_request_failed)
         }
         val httpSuffix = error.code?.let { " (HTTP $it)" } ?: ""
         return StreamAttemptFailure(
