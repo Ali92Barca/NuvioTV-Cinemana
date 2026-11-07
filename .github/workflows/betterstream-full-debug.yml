@@ -4,6 +4,9 @@ on:
     branches: [experimental/betterstream-tmdb]
     paths:
       - '.github/workflows/betterstream-full-debug.yml'
+      - 'app/**'
+      - 'gradle.properties'
+      - 'scripts/configure-services.py'
 permissions:
   contents: read
 jobs:

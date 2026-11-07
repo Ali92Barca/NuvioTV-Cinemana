@@ -237,6 +237,10 @@ android {
 
     buildTypes {
         debug {
+            val experimentalTestNumber = providers.gradleProperty("experimentalTestNumber").get()
+            require(experimentalTestNumber.toIntOrNull()?.let { it > 0 } == true)
+            versionNameSuffix = " Test $experimentalTestNumber"
+            resValue("string", "app_name", "Nuvio ${android.defaultConfig.versionName} Test $experimentalTestNumber")
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = true
             isMinifyEnabled = false
