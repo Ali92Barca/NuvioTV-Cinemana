@@ -213,6 +213,9 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
             return if (projected.contentId == requestedTarget) projected else value
         }
         val input = if (value.contentType in setOf("series", "tv") && !value.contentId.startsWith("xt_") &&
+            (!nativePlaybackId(value.contentId) || (entries.value.none { it.native == value.contentId } &&
+                externalRows.any { externalCanonical(it.canonical) == externalCanonical(value.contentId) &&
+                    it.canonicalSeason == value.season && it.canonicalEpisode == value.episode })) &&
             externalRows.any { externalCanonical(it.canonical) == externalCanonical(value.contentId) }) {
             val id = externalCanonical(value.contentId)
             if (id != value.contentId && value.season != null && value.episode != null)
