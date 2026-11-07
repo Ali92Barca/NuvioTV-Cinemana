@@ -18,6 +18,7 @@ class ExternalAddonBridgeTest {
         val actual = VideoDto("xt_s_src_42:1:1", title = "Different title", released = "2025-01-01", season = 1, episode = 1)
         assertTrue(bridge.compatible(expected, actual, arabic = true, count = 2))
         assertFalse(bridge.compatible(expected, actual, arabic = false, count = 2))
+        assertTrue(bridge.compatible(expected, actual.copy(title = "AR - Some Show مترجم - S01E01", released = null), arabic = false, count = 2))
         assertEquals("ليل البنفسج" to 2, bridge.splitPart("ليل البنفسج 2"))
         assertEquals("Some Show" to 3, bridge.splitPart("Some Show 3"))
     }

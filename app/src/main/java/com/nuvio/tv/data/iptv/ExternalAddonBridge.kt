@@ -119,7 +119,8 @@ class ExternalAddonBridge @Inject constructor(
         val name = ExternalAddonTitleMatcher.normalize(actual.title ?: actual.name.orEmpty())
         val expectedName = ExternalAddonTitleMatcher.normalize(expected.title)
         val generic = Regex("(?:^|.* )(?:episode|ep|الحلقه) 0*[0-9]+$")
-        if (expectedName.isBlank() || (name != expectedName && !(generic.matches(name) && count >= 2))) return false
+        val numbered = Regex("(?:^|.* )s[0-9]+ ?e[0-9]+$")
+        if (expectedName.isBlank() || (name != expectedName && !((generic.matches(name) || numbered.matches(name)) && count >= 2))) return false
         return expected.released == null || actual.released == null || expected.released.take(10) == actual.released.take(10)
     }
 
