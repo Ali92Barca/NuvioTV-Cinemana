@@ -1,0 +1,21 @@
+<resources>
+    <string name="bingers_connected">Connected</string>
+    <string name="bingers_disconnected">Not connected</string>
+    <string name="bingers_connected_subtitle">Manage your account and watch-history sync</string>
+    <string name="bingers_connect_subtitle">Connect from your phone using a QR code</string>
+    <string name="bingers_link_success">Bingers account connected</string>
+    <string name="bingers_sync_title">Sync watched titles</string>
+    <string name="bingers_sync_subtitle">Mark watched after 80% playback</string>
+    <string name="bingers_retry">Retry sync</string>
+    <string name="bingers_queue">Pending: %1$d · Unmatched: %2$d</string>
+    <string name="bingers_disconnect">Disconnect account</string>
+    <string name="bingers_phone_instructions">Scan with your phone, request a Bingers login link, then paste it into the page and send it to this TV.</string>
+    <string name="bingers_qr_description">Scan to connect Bingers</string>
+    <string name="bingers_same_network">Keep this dialog open. Your phone and TV must share the same network. The QR expires in 10 minutes.</string>
+    <string name="bingers_preparing">Preparing connection…</string>
+    <string name="bingers_linking">Connecting account…</string>
+    <string name="bingers_new_qr">New QR code</string>
+    <string name="bingers_close">Close</string>
+    <string name="bingers_pairing_expired">Pairing expired. Generate a new QR code.</string>
+    <string name="bingers_pairing_network_error">Check the TV network connection, then generate a new QR code.</string>
+</resources>

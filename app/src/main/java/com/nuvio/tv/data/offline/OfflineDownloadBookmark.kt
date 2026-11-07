@@ -1,0 +1,67 @@
+package com.nuvio.tv.data.offline
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.*
+import javax.inject.Inject
+
+@HiltViewModel
+class OfflineDownloadStatusViewModel @Inject constructor(downloads: OfflineDownloads) : ViewModel() {
+    val keys = flow {
+        while (true) {
+            emit(runCatching { downloads.list().filter { downloads.ready(it) }.flatMap { it.identity?.keys().orEmpty() }.toSet() }.getOrDefault(emptySet()))
+            delay(2_000)
+        }
+    }.flowOn(Dispatchers.IO).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+}
+
+@Composable
+fun OfflineDownloadStatusProvider(content: @Composable () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val activity = generateSequence(context as? android.content.Context) { current ->
+        (current as? android.content.ContextWrapper)?.baseContext
+    }.filterIsInstance<androidx.activity.ComponentActivity>().firstOrNull()
+        ?: error("OfflineDownloadStatusProvider requires ComponentActivity")
+    val viewModel: OfflineDownloadStatusViewModel = hiltViewModel(viewModelStoreOwner = activity)
+    val keys by viewModel.keys.collectAsStateWithLifecycle()
+    CompositionLocalProvider(LocalOfflineDownloadKeys provides keys, content = content)
+}
+
+private val LocalOfflineDownloadKeys = compositionLocalOf<Set<String>> { emptySet() }
+
+@Composable
+fun ContinueWatchingDownloadBookmark(item: com.nuvio.tv.ui.screens.home.ContinueWatchingItem, modifier: Modifier = Modifier) {
+    val identity = when (item) {
+        is com.nuvio.tv.ui.screens.home.ContinueWatchingItem.InProgress -> item.progress.let {
+            OfflineMediaIdentity(it.contentType, it.contentId, it.videoId, it.season, it.episode)
+        }
+        is com.nuvio.tv.ui.screens.home.ContinueWatchingItem.NextUp -> item.info.let {
+            OfflineMediaIdentity(it.contentType, it.contentId, it.videoId, it.season, it.episode)
+        }
+    }
+    OfflineDownloadBookmark(identity, modifier)
+}
+
+@Composable
+fun OfflineDownloadBookmark(identity: OfflineMediaIdentity, modifier: Modifier = Modifier) {
+    val keys = LocalOfflineDownloadKeys.current
+    if (identity.keys().none { it in keys }) return
+    Icon(Icons.Default.Bookmark, contentDescription = "محملة على الجهاز",
+        tint = Color(0xFFB9F6CA), modifier = modifier.background(Color.Black.copy(alpha = .8f), RoundedCornerShape(6.dp)).padding(5.dp).size(23.dp))
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="provider_scene_skip_default">تخطي المشاهد غير الملائمة افتراضياً</string>
+    <string name="provider_scene_skip_default_sub">لروابط سينمانا وCee فقط، حسب توقيتات المصدر المختار. التغطية قد تكون غير كاملة. زر المقص يغير التشغيل الحالي فقط.</string>
+    <string name="provider_scene_skip_on">المقص: التخطي التلقائي مفعّل</string>
+    <string name="provider_scene_skip_off">المقص: التخطي التلقائي متوقف</string>
+    <string name="provider_scene_skip_unavailable">لا توجد توقيتات للمشاهد من هذا المصدر لهذا الفيديو.</string>
+    <string name="provider_scene_skip_duration_mismatch">توقف تخطي المشاهد: مدة الفيديو لا تطابق توقيتات المصدر.</string>
+</resources>

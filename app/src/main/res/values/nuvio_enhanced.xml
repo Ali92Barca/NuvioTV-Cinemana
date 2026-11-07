@@ -1,0 +1,11 @@
+<resources>
+    <string name="nuvio_enhanced_title">Nuvio Enhanced</string>
+    <string name="nuvio_enhanced_subtitle">Shared caches, posters, downloads and provider playback controls</string>
+    <string name="nuvio_poster_cache">Poster and image cache</string>
+    <string name="nuvio_details_cache">Cinemana and Cee details cache</string>
+    <string name="nuvio_conservative_ram">Use less RAM for images</string>
+    <string name="nuvio_conservative_ram_subtitle">Off uses automatic RAM sizing. Changes apply after restarting Nuvio.</string>
+    <string name="nuvio_cache_auto">Automatic</string>
+    <string name="nuvio_cache_mb">%1$d MB</string>
+    <string name="nuvio_cache_subtitle">Shared across profiles. Free space may lower the limit. Restart Nuvio after changes.</string>
+</resources>

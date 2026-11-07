@@ -1,0 +1,11 @@
+<resources>
+    <string name="nuvio_enhanced_title">تحسينات نوفيو</string>
+    <string name="nuvio_enhanced_subtitle">الكاش المشترك والبوسترات والتنزيلات وإعدادات تشغيل الإضافات</string>
+    <string name="nuvio_poster_cache">كاش البوسترات والصور</string>
+    <string name="nuvio_details_cache">كاش تفاصيل سينمانا وCee</string>
+    <string name="nuvio_conservative_ram">تقليل استخدام الرام للصور</string>
+    <string name="nuvio_conservative_ram_subtitle">عند إيقافه يحدد نوفيو الحجم تلقائياً. يطبّق التغيير بعد إعادة التشغيل.</string>
+    <string name="nuvio_cache_auto">تلقائي</string>
+    <string name="nuvio_cache_mb">%1$d ميغابايت</string>
+    <string name="nuvio_cache_subtitle">مشترك بين البروفايلات. قد تقلّل المساحة المتوفرة الحد. أعد تشغيل نوفيو بعد التغيير.</string>
+</resources>

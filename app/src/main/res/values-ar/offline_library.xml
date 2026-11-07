@@ -1,0 +1,12 @@
+<resources>
+    <string name="offline_library_empty">لا توجد تنزيلات بعد</string>
+    <string name="offline_episode_count">عدد الحلقات: %1$d</string>
+    <string name="offline_season_episode">الموسم %1$d · الحلقة %2$d</string>
+    <string name="offline_ready">تم التحميل</string>
+    <string name="offline_missing">الملف غير موجود</string>
+    <string name="offline_failed">فشل التنزيل</string>
+    <string name="offline_subtitles_pending">جاري تجهيز الترجمة</string>
+    <string name="offline_downloading">جاري التنزيل · %1$d ميغابايت</string>
+    <string name="offline_play">تشغيل</string>
+    <string name="offline_delete_title">حذف هذا التنزيل؟</string>
+</resources>

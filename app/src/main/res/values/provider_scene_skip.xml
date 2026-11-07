@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="provider_scene_skip_default">Skip marked mature scenes by default</string>
+    <string name="provider_scene_skip_default_sub">Cinemana and Cee links only. Uses the selected source’s timings; coverage varies. The scissors button changes this playback only.</string>
+    <string name="provider_scene_skip_on">Scissors: automatic scene skipping on</string>
+    <string name="provider_scene_skip_off">Scissors: automatic scene skipping off</string>
+    <string name="provider_scene_skip_unavailable">This source has no scene timings for this video.</string>
+    <string name="provider_scene_skip_duration_mismatch">Scene skipping paused: video duration does not match this source’s timings.</string>
+</resources>

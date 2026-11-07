@@ -1,0 +1,171 @@
+package com.nuvio.tv.data.repository
+
+import com.nuvio.tv.core.profile.ProfileManager
+import com.nuvio.tv.domain.model.*
+import com.nuvio.tv.domain.repository.WatchProgressRepository
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.*
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/** Reads old native histories alongside canonical histories; never migrates or deletes them on discovery. */
+@Singleton
+@OptIn(ExperimentalCoroutinesApi::class)
+class SharedWatchProgressRepository @Inject constructor(
+    private val delegate: WatchProgressRepositoryImpl,
+    private val identities: SharedPlaybackIdentity,
+    private val resolver: SharedPlaybackResolver,
+    private val profiles: ProfileManager
+) : WatchProgressRepository by delegate {
+    private fun <T> observe(id: String, block: (Set<String>) -> Flow<T>): Flow<T> = flow {
+        resolver.resolve(id)
+        emitAll(identities.entries.flatMapLatest { block(identities.related(id)) })
+    }
+    private fun list(source: Flow<List<WatchProgress>>) = combine(source, identities.entries) { items, _ -> identities.project(items) }
+    private fun latest(items: List<WatchProgress>) = identities.project(items).groupBy { it.contentId }
+        .values.mapNotNull { group -> group.maxWithOrNull(compareBy<WatchProgress> { it.lastWatched }.thenBy { it.season ?: 0 }.thenBy { it.episode ?: 0 }) }
+        .sortedByDescending { it.lastWatched }
+    override val allProgress = combine(delegate.allProgress, identities.entries) { items, _ -> latest(items) }
+    override val continueWatching = combine(delegate.continueWatching, allProgress, identities.entries) { items, all, _ ->
+        val newest = all.associateBy { it.contentId }
+        latest(items).filter { candidate -> (newest[candidate.contentId]?.lastWatched ?: 0L) <= candidate.lastWatched }
+    }
+    override val watchedItems = combine(delegate.watchedItems, identities.entries) { items, _ ->
+        items.flatMap { item ->
+            val series = item.season != null || item.contentType in setOf("series", "tv", "anime")
+            identities.related(item.contentId, seriesHint = true.takeIf { series })
+                .filter { identities.canProjectEpisode(item.contentId, it, item.season, item.episode) }
+                .map { item.copy(contentId = it) }
+        }
+    }
+    override fun getProgress(contentId: String) = profiles.activeProfileId.flatMapLatest { getProgress(contentId, it) }
+    override fun getProgress(contentId: String, profileId: Int): Flow<WatchProgress?> = observe(contentId) { ids ->
+        val legacy = if (ids.size > 1) ids.filter(::nativePlaybackId).map { delegate.localIdentityProgress(it, null, null, profileId) } else emptyList()
+        combine(ids.map { delegate.getProgress(it, profileId) } + legacy) { values ->
+            values.filterNotNull().map { identities.progress(it, contentId) }
+                .filter { it.contentId == contentId }.maxByOrNull { it.lastWatched }
+        }
+    }
+    override fun getEpisodeProgress(contentId: String, season: Int, episode: Int) =
+        profiles.activeProfileId.flatMapLatest { getEpisodeProgress(contentId, season, episode, it) }
+    override fun getEpisodeProgress(contentId: String, season: Int, episode: Int, profileId: Int): Flow<WatchProgress?> = observe(contentId) { ids ->
+        val legacy = if (ids.size > 1) ids.filter(::nativePlaybackId).map { delegate.localIdentityProgress(it, season, episode, profileId) } else emptyList()
+        combine(ids.map { delegate.getEpisodeProgress(it, season, episode, profileId) } + legacy) { values ->
+            values.filterNotNull().map { identities.progress(it, contentId) }
+                .filter { it.contentId == contentId }.maxByOrNull { it.lastWatched }
+        }
+    }
+    override fun getAllEpisodeProgress(contentId: String) = profiles.activeProfileId.flatMapLatest { getAllEpisodeProgress(contentId, it) }
+    override fun getAllEpisodeProgress(contentId: String, profileId: Int): Flow<Map<Pair<Int, Int>, WatchProgress>> = observe(contentId) { ids ->
+        val legacy = if (ids.size > 1) ids.filter(::nativePlaybackId).map { delegate.localIdentityEpisodes(it, profileId) } else emptyList()
+        combine(ids.map { delegate.getAllEpisodeProgress(it, profileId) } + legacy) { maps ->
+            maps.flatMap { it.entries }.map { it.key to identities.progress(it.value, contentId) }
+                .filter { it.second.contentId == contentId }.groupBy { it.first }.mapValues { (_, entries) ->
+                entries.maxBy { it.second.lastWatched }.second
+            }
+        }
+    }
+    override fun observeWatchedMovieIds() = combine(delegate.observeWatchedMovieIds(), allProgress, identities.entries) { ids, progress, _ ->
+        val replaying = progress.filter { it.season == null && !it.isCompleted() && (it.position > 0 || (it.progressPercent ?: 0f) > 0) }.map { it.contentId }.toSet()
+        identities.expand(ids).filterNot { identities.canonical(it) in replaying }.toSet()
+    }
+    override fun isWatched(contentId: String, videoId: String?, season: Int?, episode: Int?): Flow<Boolean> = observe(contentId) { ids ->
+        val allowed = ids.filter { identities.canProjectEpisode(contentId, it, season, episode) }
+        val watched = combine(allowed.map { delegate.isWatched(it, if (it == contentId) videoId else null, season, episode) }) { it.any { value -> value } }
+        val progress = if (season != null && episode != null) getEpisodeProgress(contentId, season, episode) else getProgress(contentId)
+        combine(watched, progress) { marked, latest ->
+            if (latest != null && !latest.isCompleted() && (latest.position > 0 || (latest.progressPercent ?: 0f) > 0)) false
+            else marked || latest?.isCompleted() == true
+        }.distinctUntilChanged()
+    }
+    private suspend fun canonical(progress: WatchProgress): WatchProgress {
+        kotlinx.coroutines.withTimeoutOrNull(1_500) { resolver.resolve(progress.contentId) }
+        return identities.progress(progress)
+    }
+    override suspend fun saveProgress(progress: WatchProgress, syncRemote: Boolean) = saveProgress(progress, profiles.activeProfileId.value, syncRemote)
+    override suspend fun saveProgress(progress: WatchProgress, profileId: Int, syncRemote: Boolean) = delegate.saveProgress(canonical(progress), profileId, syncRemote)
+    override suspend fun saveProgressBatch(progressList: List<WatchProgress>, syncRemote: Boolean) {
+        val profile = profiles.activeProfileId.value
+        val items = identities.project(progressList.map { canonical(it) })
+        if (profiles.activeProfileId.value == profile) delegate.saveProgressBatch(items, syncRemote)
+    }
+    override suspend fun markAsCompleted(progress: WatchProgress, broadcastTrackingHistory: Boolean) = markAsCompleted(progress, profiles.activeProfileId.value, broadcastTrackingHistory)
+    override suspend fun markAsCompleted(progress: WatchProgress, profileId: Int, broadcastTrackingHistory: Boolean) = delegate.markAsCompleted(canonical(progress), profileId, broadcastTrackingHistory)
+    override suspend fun markAsCompletedBatch(progressList: List<WatchProgress>) {
+        val profile = profiles.activeProfileId.value
+        for (id in progressList.map { it.contentId }.distinct()) {
+            kotlinx.coroutines.withTimeoutOrNull(1_500) { resolver.resolve(id) }
+        }
+        val items = identities.project(progressList)
+        if (profiles.activeProfileId.value == profile) delegate.markAsCompletedBatch(items)
+    }
+    override suspend fun removeProgress(contentId: String, season: Int?, episode: Int?) {
+        val profile = profiles.activeProfileId.value
+        resolver.resolve(contentId)
+        if (profiles.activeProfileId.value != profile) return
+        val aliases = episodeAliases(contentId, season, episode)
+        val canonical = identities.canonical(contentId).takeIf { it in aliases } ?: contentId
+        delegate.removeProgress(canonical, season, episode)
+        (aliases - canonical).forEach { delegate.removeLocalIdentityAlias(it, season, episode, false, profile) }
+    }
+    override suspend fun removeFromHistory(contentId: String, videoId: String?, season: Int?, episode: Int?) {
+        val profile = profiles.activeProfileId.value
+        resolver.resolve(contentId)
+        if (profiles.activeProfileId.value != profile) return
+        val aliases = episodeAliases(contentId, season, episode)
+        val canonical = identities.canonical(contentId).takeIf { it in aliases } ?: contentId
+        delegate.removeFromHistory(canonical, if (canonical == contentId) videoId else null, season, episode)
+        (aliases - canonical).forEach { delegate.removeLocalIdentityAlias(it, season, episode, true, profile) }
+    }
+    override suspend fun removeFromHistoryBatch(contentId: String, videoId: String?, episodes: List<Triple<Int, Int, String?>>) {
+        val profile = profiles.activeProfileId.value
+        resolver.resolve(contentId)
+        if (profiles.activeProfileId.value != profile) return
+        val canonical = identities.canonical(contentId)
+        val unique = episodes.distinctBy { it.first to it.second }
+        val byTarget = unique.groupBy { (s, e, _) ->
+            canonical.takeIf { it in episodeAliases(contentId, s, e) } ?: contentId
+        }
+        byTarget.forEach { (target, items) ->
+            val mapped = items.map { (s, e, id) -> Triple(s, e, if (target == contentId) id else "$target:$s:$e") }
+            delegate.removeFromHistoryBatch(target, videoId.takeIf { target == contentId }, mapped)
+            for ((s, e, _) in items) for (alias in episodeAliases(contentId, s, e) - target) {
+                delegate.removeLocalIdentityAlias(alias, s, e, true, profile)
+            }
+        }
+    }
+
+    private fun episodeAliases(id: String, season: Int?, episode: Int?): Set<String> {
+        val row = identities.entries.value.firstOrNull { it.native == id }
+        if (row?.partial == true && (season == null || episode == null)) return setOf(id)
+        return identities.related(id).filterTo(mutableSetOf()) { identities.canProjectEpisode(id, it, season, episode) }
+    }
+    override fun applyOptimisticWatchedMovie(ids: Set<String>, add: Boolean) = delegate.applyOptimisticWatchedMovie(identities.expand(ids), add)
+    override fun revertOptimisticWatchedMovie(ids: Set<String>, add: Boolean) = delegate.revertOptimisticWatchedMovie(identities.expand(ids), add)
+    override suspend fun getWatchedShowEpisodes(): Map<String, Set<Pair<Int, Int>>> {
+        val result = mutableMapOf<String, Set<Pair<Int, Int>>>()
+        delegate.getWatchedShowEpisodes().forEach { (id, episodes) -> identities.related(id).forEach { alias ->
+            val compatible = episodes.filter { identities.canProjectEpisode(id, alias, it.first, it.second) }.toSet()
+            result[alias] = result[alias].orEmpty() + compatible
+        } }
+        return result
+    }
+    override suspend fun getShowIdSiblings(): Map<String, Set<String>> {
+        val result = delegate.getShowIdSiblings().toMutableMap()
+        identities.entries.value.filter { it.series }.forEach { row -> identities.related(row.native).forEach { result[it] = result[it].orEmpty() + identities.related(it) } }
+        return result
+    }
+    override fun getAiredEpisodeOrder(contentId: String) = observe(contentId) { delegate.getAiredEpisodeOrder(identities.canonical(contentId)) }
+    override fun observeNextUpSeeds() = combine(delegate.observeNextUpSeeds(), identities.entries) { items, _ -> latest(items) }
+    override fun isDroppedShow(contentId: String) = delegate.isDroppedShow(identities.canonical(contentId))
+    override suspend fun normalizeParentContentId(parentContentId: String, videoId: String?): String =
+        normalizeParentContentId(parentContentId, videoId, profiles.activeProfileId.value)
+    override suspend fun normalizeParentContentId(parentContentId: String, videoId: String?, profileId: Int): String {
+        val resolved = resolver.resolve(parentContentId)
+        val row = identities.entries.value.firstOrNull { it.native == parentContentId }
+        if (row?.partial == true && videoId !in row.episodes.values) return parentContentId
+        return delegate.normalizeParentContentId(resolved, if (resolved == parentContentId) videoId else null, profileId)
+    }
+    override suspend fun prepareNextUpSeed(progress: WatchProgress) = delegate.prepareNextUpSeed(canonical(progress))
+    override fun observeOptimisticContinueWatchingUpdates() = delegate.observeOptimisticContinueWatchingUpdates().map { identities.progress(it) }
+}
