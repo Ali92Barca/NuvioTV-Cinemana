@@ -59,6 +59,26 @@ class ExternalAddonBridgeTest {
             })))
         assertEquals("xt_s_src_3:2:1", bridge.resolve(seriesAddon(), "series", canonical, 1, 1))
     }
+    @Test fun cumulativeSeasonsResolvePastEpisodeSevenWithOriginalXtreamIds() = runBlocking {
+        val canonical = canonical()
+        every { canonical.name } returns "المدينة البعيدة"
+        every { canonical.releaseInfo } returns "2024"
+        every { canonical.videos } returns (episodes(season = 1, count = 28) +
+            episodes(season = 2, count = 35) + episodes(season = 3, count = 35).map {
+                if (it.episode!! > 8) it.copy(released = "2099-01-01") else it
+            })
+        coEvery { api.getCatalog(any()) } returns Response.success(CatalogResponseDto(listOf(
+            MetaPreviewDto("xt_s_src_1", "series", "Uzak Şehir المدينة البعيدة", releaseInfo = "2024"))))
+        val source = (1..28).map { 1 to it } + (29..63).map { 2 to it } + (64..71).map { 3 to it }
+        coEvery { api.getMeta(any()) } returns Response.success(MetaResponseDto(MetaDto(
+            "xt_s_src_1", "series", "Uzak Şehir المدينة البعيدة", videos = source.map { (s, e) ->
+                VideoDto("xt_s_src_1:$s:$e", title = "Uzak Şehir - S${s}E${e}", season = s, episode = e)
+            })))
+        assertEquals("xt_s_src_1:2:36", bridge.resolve(seriesAddon(), "series", canonical, 2, 8))
+        assertEquals("xt_s_src_1:2:63", bridge.resolve(seriesAddon(), "series", canonical, 2, 35))
+        assertEquals("xt_s_src_1:3:71", bridge.resolve(seriesAddon(), "series", canonical, 3, 8))
+        assertNull(bridge.resolve(seriesAddon(), "series", canonical, 3, 9))
+    }
     private val api = mockk<AddonApi>()
     private val bridge = ExternalAddonBridge(api)
     private fun addon(base: String = "https://example.test/config?token=private") = Addon(

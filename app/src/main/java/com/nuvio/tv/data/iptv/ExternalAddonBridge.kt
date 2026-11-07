@@ -100,12 +100,18 @@ class ExternalAddonBridge @Inject constructor(
                 val nativeNumbers = nativeSeasonVideos.mapNotNull { it.episode }.toSet()
                 val airedSeason = completeSeason.filter { it.available != false && isEpisodeReleaseAired(it.released) != false }
                 val airedNumbers = airedSeason.mapNotNull { it.episode }.toSet()
-                val expectedSeason = if (!info.arabic && completeNumbers != nativeNumbers && airedNumbers == nativeNumbers) airedSeason else completeSeason
+                val offset = ExternalEpisodeNumbering.offset(
+                    canonical.videos.filter { it.season != null }.groupBy { it.season!! }
+                        .mapValues { (_, videos) -> videos.mapNotNull { it.episode }.toSet() },
+                    native.videos.orEmpty().filter { it.season != null }.groupBy { it.season!! }
+                        .mapValues { (_, videos) -> videos.mapNotNull { it.episode } },
+                    season, nativeSeason, airedNumbers, info.arabic) ?: return@mapNotNull null
+                val normalizedNumbers = nativeNumbers.map { it - offset }.toSet()
+                val expectedSeason = if (!info.arabic && completeNumbers != normalizedNumbers && airedNumbers == normalizedNumbers) airedSeason else completeSeason
                 val expectedNumbers = expectedSeason.mapNotNull { it.episode }.toSet()
                 // The owner permits ar works to bypass edition/count checks. Identity and
                 // an existing, unique native episode are still required. Part mapping is separate.
-                if (!acceptsLayout(if (info.arabic) "ar" else null, completeNumbers, nativeNumbers, airedNumbers)) return@mapNotNull null
-                val video = nativeSeasonVideos.singleOrNull { it.episode == episode } ?: return@mapNotNull null
+                val video = nativeSeasonVideos.singleOrNull { it.episode == episode + offset } ?: return@mapNotNull null
                 if (!compatible(expected, video, info.arabic, expectedNumbers.size)) return@mapNotNull null
                 val canonicalId = (if (partParent) canonical.id.takeIf { Regex("cinemana-series:[0-9]+|cee:[0-9]+").matches(it) } else null)
                     ?: info.tmdbId?.takeIf { partParent }?.let { "tmdb:tv:$it" }
@@ -115,8 +121,8 @@ class ExternalAddonBridge @Inject constructor(
                 if (canonicalId != null) identities?.learnExternalSeason(addon.baseUrl, native.id, canonicalId, nativeSeason, season,
                     expectedSeason.mapNotNull { item ->
                         val number = item.episode ?: return@mapNotNull null
-                        val source = nativeSeasonVideos.singleOrNull { it.episode == number } ?: return@mapNotNull null
-                        if (compatible(item, source, info.arabic, expectedNumbers.size)) Triple(number, source.id, number) else null
+                        val source = nativeSeasonVideos.singleOrNull { it.episode == number + offset } ?: return@mapNotNull null
+                        if (compatible(item, source, info.arabic, expectedNumbers.size)) Triple(number + offset, source.id, number) else null
                     }, allowPartAlias = partParent, canonicalVideos = if (canonicalId == canonical.id)
                         expectedSeason.mapNotNull { item -> item.episode?.let { it to item.id } }.toMap() else emptyMap())
                 video.id.takeIf { it.isNotBlank() }
@@ -124,7 +130,7 @@ class ExternalAddonBridge @Inject constructor(
         } ?: emptyList()
 
     internal fun acceptsLayout(originalLanguage: String?, expected: Set<Int>, actual: Set<Int>, aired: Set<Int> = expected) =
-        originalLanguage == "ar" || expected == actual || (aired.isNotEmpty() && aired == actual && expected.containsAll(aired))
+        ExternalEpisodeNumbering.acceptsLayout(originalLanguage == "ar", expected, actual, aired)
 
     internal fun compatible(expected: Video, actual: VideoDto, arabic: Boolean, count: Int): Boolean {
         if (actual.id.isBlank()) return false
@@ -165,24 +171,30 @@ class ExternalAddonBridge @Inject constructor(
                 val canonical = if (numberedPart) "tmdb:tv:${match.tmdbId}" else imdb ?: "tmdb:tv:${match.tmdbId}"
                 if (!numberedPart) identities.learnExternalCanonical(match.tmdbId.toString(), imdb)
                 val verified = mutableSetOf<String>()
-                for ((season, videos) in native.videos.filter { (it.season ?: 0) > 0 }.groupBy { it.season!! }.entries.take(30)) {
+                val sourceSeasons = native.videos.filter { (it.season ?: 0) > 0 }.groupBy { it.season!! }
+                val canonicalSeasons = mutableMapOf<Int, Set<Int>>()
+                for ((season, videos) in sourceSeasons.entries.sortedBy { it.key }.take(30)) {
                     val complete = api.getTvSeasonDetails(match.tmdbId, season, BuildConfig.TMDB_API_KEY, "ar-SA")
                         .body()?.episodes ?: continue
                     val sourceNumbers = videos.mapNotNull { it.episode }.toSet()
                     val completeNumbers = complete.mapNotNull { it.episodeNumber }.toSet()
+                    canonicalSeasons[season] = completeNumbers
                     val aired = complete.filter { isEpisodeReleaseAired(it.airDate) != false }
                     val airedNumbers = aired.mapNotNull { it.episodeNumber }.toSet()
-                    val expected = if (!arabic && completeNumbers != sourceNumbers && airedNumbers == sourceNumbers) aired else complete
+                    val offset = ExternalEpisodeNumbering.offset(canonicalSeasons,
+                        sourceSeasons.mapValues { (_, items) -> items.mapNotNull { it.episode } },
+                        season, season, airedNumbers, arabic) ?: continue
+                    val normalizedNumbers = sourceNumbers.map { it - offset }.toSet()
+                    val expected = if (!arabic && completeNumbers != normalizedNumbers && airedNumbers == normalizedNumbers) aired else complete
                     val expectedNumbers = expected.mapNotNull { it.episodeNumber }.toSet()
-                    if (!acceptsLayout(details.originalLanguage, completeNumbers, sourceNumbers, airedNumbers)) continue
                     val verifiedSeason = mutableListOf<Triple<Int, String, Int>>()
                     for (item in expected) {
                         val number = item.episodeNumber ?: continue
-                        val video = videos.singleOrNull { it.episode == number } ?: continue
+                        val video = videos.singleOrNull { it.episode == number + offset } ?: continue
                         val canonicalVideo = video.copy(title = item.name.orEmpty(), released = item.airDate)
                         val sourceVideo = VideoDto(video.id, title = video.title, released = video.released, season = season, episode = number)
                         if (!compatible(canonicalVideo, sourceVideo, arabic, expectedNumbers.size)) continue
-                        verifiedSeason += Triple(number, video.id, number)
+                        verifiedSeason += Triple(number + offset, video.id, number)
                         verified += video.id
                     }
                     identities.learnExternalSeason(addon.baseUrl, native.id, canonical, season, season, verifiedSeason)

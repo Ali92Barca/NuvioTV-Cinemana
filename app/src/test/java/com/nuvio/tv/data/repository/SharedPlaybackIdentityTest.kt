@@ -68,6 +68,23 @@ class SharedPlaybackIdentityTest {
         assertFalse(values["external_episodes_v1"].orEmpty().contains("private-one"))
     }
 
+    @Test fun `cumulative native episode coordinates round trip without moving the watch position`() {
+        val native = "xt_s_src_42"
+        registry.learnExternalSeason("https://example.test/a", native, "tt101", 2, 2,
+            (1..35).map { Triple(it + 28, "$native:2:${it + 28}", it) })
+        val raw = progress(native, series = true).copy(season = 2, episode = 36, videoId = "$native:2:36")
+        val public = registry.progress(raw)
+        assertEquals("tt101:2:8", public.videoId)
+        assertEquals(8, public.episode)
+        assertEquals(raw.position, public.position)
+        assertEquals(raw.duration, public.duration)
+        val restored = SharedPlaybackIdentity(context)
+        val inverse = restored.progress(public, native)
+        assertEquals(raw.videoId, inverse.videoId)
+        assertEquals(36, inverse.episode)
+        assertEquals(2 to 36, restored.externalQuery("tt101", native, 2, 8))
+        assertEquals(native, restored.progress(raw.copy(episode = 28)).contentId)
+    }
     @Test fun `same Xtream id in two subscriptions requires matching source scope`() {
         val native = "xt_s_src_42"
         registry.learnExternalEpisode("https://example.test/account-a", native, "$native:1:1", 1, 1, "tt101", 1, 1)
