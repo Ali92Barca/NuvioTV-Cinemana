@@ -67,6 +67,7 @@ class ExternalAddonBridgeTest {
         catalogs = listOf(CatalogDescriptor(ContentType.MOVIE, id = "all", name = "All",
             extra = listOf(CatalogExtra("search")))))
     private fun canonical(): Meta = mockk<Meta> {
+        every { id } returns "tt1234567"
         every { name } returns "Example"
         every { releaseInfo } returns "2020"
         every { released } returns null

@@ -2,6 +2,7 @@ package com.nuvio.tv.data.iptv
 
 import com.nuvio.tv.BuildConfig
 import com.nuvio.tv.core.util.isEpisodeReleaseAired
+import com.nuvio.tv.data.mapper.toDomain
 import com.nuvio.tv.data.remote.api.AddonApi
 import com.nuvio.tv.data.remote.api.TmdbApi
 import com.nuvio.tv.data.remote.dto.MetaPreviewDto
@@ -45,11 +46,14 @@ class ExternalAddonBridge @Inject constructor(
     suspend fun resolveAll(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?): List<String> =
         withTimeoutOrNull(25_000) {
             val info = info(canonical, type)
-            val part = if (type == "series" && season == 1) splitPart(canonical.name) else null
-            fun isPartParent(candidate: ExternalAddonTitleMatcher.Candidate) = part != null &&
-                ExternalAddonTitleMatcher.titleVariants(candidate.name).intersect(ExternalAddonTitleMatcher.titleVariants(part.first)).isNotEmpty() &&
-                ExternalAddonTitleMatcher.titleVariants(candidate.name).intersect(ExternalAddonTitleMatcher.titleVariants(canonical.name)).isEmpty()
-            val titles = info.titles + listOfNotNull(part?.first)
+            val parts = if (type == "series" && season == 1) info.titles.mapNotNull { label -> splitPart(label)?.let { Triple(label, it.first, it.second) } } else emptyList()
+            val partNumber = parts.map { it.third }.distinct().singleOrNull()
+            val bases = parts.filter { it.third == partNumber }.flatMap { ExternalAddonTitleMatcher.titleVariants(it.second) }.toSet()
+            val numberedTitles = parts.flatMap { ExternalAddonTitleMatcher.titleVariants(it.first) }.toSet()
+            fun isPartParent(candidate: ExternalAddonTitleMatcher.Candidate) = partNumber != null &&
+                ExternalAddonTitleMatcher.titleVariants(candidate.name).intersect(bases).isNotEmpty() &&
+                ExternalAddonTitleMatcher.titleVariants(candidate.name).intersect(numberedTitles).isEmpty()
+            val titles = (parts.map { it.second } + info.titles).toSet()
             val rows = mutableListOf<MetaPreviewDto>()
             for (title in titles.take(4)) for (catalog in catalogs(addon, type)) {
                 val key = hash(listOf(addon.baseUrl, addon.version, catalog.id, type, title).joinToString("\u0000"))
@@ -88,7 +92,8 @@ class ExternalAddonBridge @Inject constructor(
                 if (native.id != candidate.originalId || native.type != type) return@mapNotNull null
                 val partParent = isPartParent(candidate)
                 if (!partParent && (conflicts(info.imdbId, native.imdbId) || conflicts(info.tmdbId, native.tmdbId))) return@mapNotNull null
-                val nativeSeason = if (partParent) part!!.second else season
+                val nativeSeason = if (partParent) partNumber!! else season
+                if (partParent) enrichNative(addon, native.toDomain("Episode"))
                 val completeSeason = canonical.videos.filter { it.season == season }
                 val nativeSeasonVideos = native.videos.orEmpty().filter { it.season == nativeSeason }
                 val completeNumbers = completeSeason.mapNotNull { it.episode }.toSet()
@@ -102,7 +107,9 @@ class ExternalAddonBridge @Inject constructor(
                 if (!acceptsLayout(if (info.arabic) "ar" else null, completeNumbers, nativeNumbers, airedNumbers)) return@mapNotNull null
                 val video = nativeSeasonVideos.singleOrNull { it.episode == episode } ?: return@mapNotNull null
                 if (!compatible(expected, video, info.arabic, expectedNumbers.size)) return@mapNotNull null
-                val canonicalId = info.imdbId?.takeIf { Regex("tt[0-9]+").matches(it) }
+                val canonicalId = (if (partParent) canonical.id.takeIf { Regex("cinemana-series:[0-9]+|cee:[0-9]+").matches(it) } else null)
+                    ?: info.tmdbId?.takeIf { partParent }?.let { "tmdb:tv:$it" }
+                    ?: info.imdbId?.takeIf { Regex("tt[0-9]+").matches(it) }
                     ?: info.tmdbId?.let { "tmdb:tv:$it" }
                     ?: canonical.id.takeIf { Regex("cinemana-series:[0-9]+|cee:[0-9]+").matches(it) }
                 if (canonicalId != null) identities?.learnExternalSeason(addon.baseUrl, native.id, canonicalId, nativeSeason, season,
@@ -110,7 +117,8 @@ class ExternalAddonBridge @Inject constructor(
                         val number = item.episode ?: return@mapNotNull null
                         val source = nativeSeasonVideos.singleOrNull { it.episode == number } ?: return@mapNotNull null
                         if (compatible(item, source, info.arabic, expectedNumbers.size)) Triple(number, source.id, number) else null
-                    })
+                    }, allowPartAlias = partParent, canonicalVideos = if (canonicalId == canonical.id)
+                        expectedSeason.mapNotNull { item -> item.episode?.let { it to item.id } }.toMap() else emptyMap())
                 video.id.takeIf { it.isNotBlank() }
             }.distinct()
         } ?: emptyList()
@@ -153,8 +161,9 @@ class ExternalAddonBridge @Inject constructor(
                 val imdb = api.getTvExternalIds(match.tmdbId, BuildConfig.TMDB_API_KEY).body()?.imdbId
                     ?.takeIf { Regex("tt[0-9]+").matches(it) }
                 if (conflicts(native.imdbId, imdb) || conflicts(native.tmdbId, match.tmdbId.toString())) return@withTimeoutOrNull native
-                val canonical = imdb ?: "tmdb:tv:${match.tmdbId}"
-                identities.learnExternalCanonical(match.tmdbId.toString(), imdb)
+                val numberedPart = labels.any { splitPart(it) != null }
+                val canonical = if (numberedPart) "tmdb:tv:${match.tmdbId}" else imdb ?: "tmdb:tv:${match.tmdbId}"
+                if (!numberedPart) identities.learnExternalCanonical(match.tmdbId.toString(), imdb)
                 val verified = mutableSetOf<String>()
                 for ((season, videos) in native.videos.filter { (it.season ?: 0) > 0 }.groupBy { it.season!! }.entries.take(30)) {
                     val complete = api.getTvSeasonDetails(match.tmdbId, season, BuildConfig.TMDB_API_KEY, "ar-SA")
@@ -205,8 +214,10 @@ class ExternalAddonBridge @Inject constructor(
                 arabic = it.originalLanguage == "ar"
             }
             if (type == "series" && imdb == null) imdb = tmdb.getTvExternalIds(id.toInt(), BuildConfig.TMDB_API_KEY).body()?.imdbId
+            if (type == "series") tmdb.getTvAlternativeTitles(id.toInt(), BuildConfig.TMDB_API_KEY).body()?.tvTitles
+                .orEmpty().mapNotNull { it.title }.filter(String::isNotBlank).forEach(titles::add)
         } catch (e: CancellationException) { throw e } catch (_: Exception) { /* optional aliases */ }
-        if (type == "series" && id != null) identities?.learnExternalCanonical(id, imdb)
+        if (type == "series" && id != null && titles.none { splitPart(it) != null }) identities?.learnExternalCanonical(id, imdb)
         return Info(titles, id, imdb, arabic)
     }
     internal fun splitPart(title: String): Pair<String, Int>? {

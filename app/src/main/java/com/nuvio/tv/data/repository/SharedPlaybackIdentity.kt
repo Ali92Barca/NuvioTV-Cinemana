@@ -3,6 +3,7 @@ package com.nuvio.tv.data.repository
 import android.content.Context
 import com.nuvio.tv.domain.model.Meta
 import com.nuvio.tv.domain.model.WatchProgress
+import com.nuvio.tv.domain.model.WatchedItem
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.google.gson.Gson
@@ -23,7 +24,8 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     internal val entries = MutableStateFlow(read())
     internal data class ExternalEpisode(val scope: String, val native: String, val nativeVideo: String,
         val nativeSeason: Int, val nativeEpisode: Int, val canonical: String,
-        val canonicalSeason: Int, val canonicalEpisode: Int)
+        val canonicalSeason: Int, val canonicalEpisode: Int, val alias: Boolean = false,
+        val canonicalVideo: String? = null)
     private val externalRows = runCatching {
         Gson().fromJson<List<ExternalEpisode>>(prefs.getString("external_episodes_v1", "[]"),
             object : TypeToken<List<ExternalEpisode>>() {}.type).orEmpty()
@@ -33,14 +35,30 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         Gson().fromJson<Map<String, String>>(prefs.getString("external_canonical_links_v1", "{}"),
             object : TypeToken<Map<String, String>>() {}.type).orEmpty()
     }.getOrDefault(emptyMap()).toMutableMap()
+    private val externalTmdbPattern = Regex("tmdb:(?:(?:tv|series):)?([0-9]+)")
+    private var indexedRevision = -1L
+    private var rowsByEdge = emptyMap<List<String>, List<ExternalEpisode>>()
+    private var rowsByRef = emptyMap<Triple<String, Int, Int>, List<ExternalEpisode>>()
+    private var rowsByNative = emptyMap<Triple<String, Int, Int>, List<ExternalEpisode>>()
+    private var rowsByTitle = emptyMap<String, List<ExternalEpisode>>()
+    private var partIds = emptySet<String>()
+    private fun indexExternal() {
+        if (indexedRevision == externalRevision.value) return
+        rowsByEdge = externalRows.groupBy(::edge)
+        rowsByRef = externalRows.groupBy(::reference)
+        rowsByNative = externalRows.groupBy { Triple(it.native, it.nativeSeason, it.nativeEpisode) }
+        rowsByTitle = externalRows.flatMap { listOf(it.native to it, externalCanonical(it.canonical) to it) }.groupBy({ it.first }, { it.second })
+        partIds = externalRows.filter { it.nativeSeason != it.canonicalSeason || it.nativeEpisode != it.canonicalEpisode }
+            .flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) }.toSet()
+        indexedRevision = externalRevision.value
+    }
     private fun externalCanonical(id: String): String {
         var current = id
         val visited = mutableSetOf<String>()
         while (visited.add(current)) {
-            val number = Regex("tmdb:(?:(?:tv|series):)?([0-9]+)").matchEntire(current)?.groupValues?.get(1)
+            val number = externalTmdbPattern.matchEntire(current)?.groupValues?.get(1)
             val key = number?.let { "tmdb:tv:$it" } ?: current
-            val builtin = if (nativePlaybackId(current)) canonical(current, true) else key
-            val next = externalCanonicalLinks[current] ?: externalCanonicalLinks[key] ?: builtin
+            val next = externalCanonicalLinks[current] ?: externalCanonicalLinks[key] ?: key
             if (next == current) return current
             current = next
         }
@@ -63,7 +81,8 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
             listOf(Triple(nativeEpisode, nativeVideo, canonicalEpisode)))
     }
     @Synchronized internal fun learnExternalSeason(baseUrl: String, native: String, canonical: String,
-        nativeSeason: Int, canonicalSeason: Int, videos: List<Triple<Int, String, Int>>) {
+        nativeSeason: Int, canonicalSeason: Int, videos: List<Triple<Int, String, Int>>,
+        allowPartAlias: Boolean = false, canonicalVideos: Map<Int, String> = emptyMap()) {
         if (!Regex("xt_s_[A-Za-z0-9]+_[0-9]+").matches(native) || baseUrl.isBlank() ||
             !Regex("tt[0-9]+|tmdb:(?:tv:|series:)?[0-9]+|cinemana-series:[0-9]+|cee:[0-9]+").matches(canonical)) return
         val scope = sourceScope(baseUrl)
@@ -71,30 +90,15 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         for ((nativeEpisode, nativeVideo, canonicalEpisode) in videos) {
         if (!Regex("xt_[A-Za-z0-9_:.-]+").matches(nativeVideo)) continue
         val row = ExternalEpisode(scope, native, nativeVideo, nativeSeason, nativeEpisode,
-            canonical, canonicalSeason, canonicalEpisode)
+            canonical, canonicalSeason, canonicalEpisode, allowPartAlias || nativePlaybackId(canonical),
+            canonicalVideos[canonicalEpisode]?.takeIf { Regex("[A-Za-z0-9_:.-]+").matches(it) })
         val existing = externalRows.filter { it.scope == row.scope && it.native == native &&
             it.nativeSeason == nativeSeason && it.nativeEpisode == nativeEpisode }
-        // Never silently replace a previously verified episode with a different work.
-        if (existing.isNotEmpty()) {
-            val previous = externalCanonical(existing.first().canonical)
-            val next = externalCanonical(canonical)
-            // A verified native episode can connect a built-in source anchor to its
-            // public identity; two conflicting public identities never overwrite each other.
-            val anchor = canonical.takeIf(::nativePlaybackId)?.takeIf { this.canonical(it, true) == it }
-                ?: existing.first().canonical.takeIf(::nativePlaybackId)?.takeIf { this.canonical(it, true) == it }
-            val destination = if (anchor == canonical) previous else next
-            val sameCoordinates = existing.first().canonicalSeason == canonicalSeason && existing.first().canonicalEpisode == canonicalEpisode
-            if (sameCoordinates && anchor != null && anchor != destination && !externalCanonicalLinks.containsKey(anchor)) {
-                externalCanonicalLinks[anchor] = destination
-                changed = true
-            }
-            if (sameCoordinates && nativePlaybackId(canonical) && existing.none { it.canonical == canonical } &&
-                externalCanonical(canonical) == previous) {
-                externalRows += row
-                changed = true
-            }
-            continue
-        }
+        if (existing.any { externalCanonical(it.canonical) == externalCanonical(canonical) &&
+            it.canonicalSeason == canonicalSeason && it.canonicalEpisode == canonicalEpisode }) continue
+        // A numbered-part proof may add an episode alias, never a whole-work alias.
+        // Competing primary identities still cannot silently rematch a source episode.
+        if (existing.any { !it.alias } && !row.alias) continue
         externalRows += row
         changed = true
         }
@@ -103,36 +107,94 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
             .putString("external_canonical_links_v1", Gson().toJson(externalCanonicalLinks)).commit())
         externalRevision.value += 1
     }
-    @Synchronized internal fun externalRelated(id: String): Set<String> = setOf(id) + externalRows
-        .filter { it.native == id || externalCanonical(it.canonical) == externalCanonical(id) }
-        .flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) }
+    private fun edge(row: ExternalEpisode) = listOf(row.scope, row.native, row.nativeSeason.toString(), row.nativeEpisode.toString())
+    private fun reference(row: ExternalEpisode) = Triple(externalCanonical(row.canonical), row.canonicalSeason, row.canonicalEpisode)
+    private fun episodeClosure(start: Set<List<String>>): List<ExternalEpisode> {
+        indexExternal()
+        var edges = start
+        while (true) {
+            val rows = edges.flatMap { rowsByEdge[it].orEmpty() }
+            val refs = rows.map(::reference).toSet()
+            val next = edges + refs.flatMap { rowsByRef[it].orEmpty() }.map(::edge)
+            if (next == edges) return rows
+            edges = next
+        }
+    }
+    private fun hasExternalCoordinate(id: String, season: Int?, episode: Int?): Boolean {
+        indexExternal()
+        if (season == null || episode == null) return false
+        return rowsByNative.containsKey(Triple(id, season, episode)) || rowsByRef.containsKey(Triple(externalCanonical(id), season, episode))
+    }
+    @Synchronized internal fun externalRelated(id: String): Set<String> {
+        indexExternal()
+        val touched = (rowsByTitle[id].orEmpty() + rowsByTitle[externalCanonical(id)].orEmpty()).map(::edge).toSet()
+        return setOf(id) + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) }
+    }
+    @Synchronized internal fun hasPartBinding(id: String): Boolean {
+        indexExternal()
+        return id in partIds || externalCanonical(id) in partIds
+    }
 
     @Synchronized internal fun externalQuery(from: String, to: String, season: Int, episode: Int): Pair<Int, Int>? {
         if (from == to) return season to episode
-        val rows = externalRows.filter { (it.native == from && externalCanonical(it.canonical) == externalCanonical(canonical(to, true)) && it.nativeSeason == season && it.nativeEpisode == episode) ||
-            (externalCanonical(it.canonical) == externalCanonical(canonical(from, true)) && it.native == to && it.canonicalSeason == season && it.canonicalEpisode == episode) }
-        return rows.map { if (it.native == to) it.nativeSeason to it.nativeEpisode else it.canonicalSeason to it.canonicalEpisode }.distinct().singleOrNull()
+        indexExternal()
+        val source = if (nativePlaybackId(from) && !hasPartBinding(from) &&
+            canProjectEpisode(from, canonical(from, true), season, episode)) canonical(from, true) else from
+        val destination = if (nativePlaybackId(to) && !hasPartBinding(to)) canonical(to, true) else to
+        val starts = (rowsByNative[Triple(from, season, episode)].orEmpty() + rowsByRef[Triple(externalCanonical(source), season, episode)].orEmpty()).map(::edge).toSet()
+        return episodeClosure(starts).mapNotNull {
+            when {
+                it.native == to -> it.nativeSeason to it.nativeEpisode
+                externalCanonical(it.canonical) == externalCanonical(destination) -> it.canonicalSeason to it.canonicalEpisode
+                else -> null
+            }
+        }.distinct().singleOrNull()
     }
-    private fun ambiguousExternalCoordinate(native: String, season: Int?, episode: Int?) = externalRows
-        .filter { it.native == native && it.nativeSeason == season && it.nativeEpisode == episode }
-        .map { Triple(externalCanonical(it.canonical), it.canonicalSeason, it.canonicalEpisode) }.distinct().size > 1
-    @Synchronized private fun externalProgress(value: WatchProgress, target: String? = null): WatchProgress {
-        val scope = value.addonBaseUrl?.let(::sourceScope)
-        val rows = externalRows.filter { row ->
-            (row.native == value.contentId && row.nativeSeason == value.season && row.nativeEpisode == value.episode &&
-                !(scope == null && ambiguousExternalCoordinate(row.native, value.season, value.episode)) &&
-                (scope == null || scope == row.scope) && (target == null || externalCanonical(canonical(target, true)) == externalCanonical(row.canonical))) ||
-            (target == row.native && row.canonicalSeason == value.season && row.canonicalEpisode == value.episode &&
-                externalCanonical(row.canonical) == externalCanonical(value.contentId) &&
-                !ambiguousExternalCoordinate(row.native, row.nativeSeason, row.nativeEpisode))
+    private fun ambiguousExternalCoordinate(native: String, season: Int?, episode: Int?): Boolean {
+        indexExternal()
+        if (season == null || episode == null) return false
+        val groups = rowsByNative[Triple(native, season, episode)].orEmpty()
+            .groupBy { it.scope }.values.map { rows -> episodeClosure(rows.map(::edge).toSet()).map(::reference).toMutableSet() }.toMutableList()
+        if (groups.size < 2) return false
+        var joined = true
+        while (joined) {
+            joined = false
+            loop@ for (a in groups.indices) for (b in a + 1 until groups.size) if (groups[a].intersect(groups[b]).isNotEmpty()) {
+                groups[a].addAll(groups[b]); groups.removeAt(b); joined = true; break@loop
+            }
         }
-        val projected = rows.map { row ->
-            if (target == row.native) value.copy(contentId = row.native, videoId = row.nativeVideo,
-                season = row.nativeSeason, episode = row.nativeEpisode)
-            else value.copy(contentId = externalCanonical(row.canonical), videoId = "${externalCanonical(row.canonical)}:${row.canonicalSeason}:${row.canonicalEpisode}",
-                season = row.canonicalSeason, episode = row.canonicalEpisode)
-        }.distinctBy { listOf(it.contentId, it.season, it.episode, it.videoId) }
-        return projected.singleOrNull() ?: value
+        return groups.size > 1
+    }
+    @Synchronized private fun externalProgress(value: WatchProgress, target: String? = null): WatchProgress {
+        indexExternal()
+        val season = value.season ?: return value
+        val episode = value.episode ?: return value
+        val scope = value.addonBaseUrl?.let(::sourceScope)
+        val sourceRows = rowsByNative[Triple(value.contentId, season, episode)].orEmpty().filter {
+            (scope == null || scope == it.scope) && (scope != null || !ambiguousExternalCoordinate(it.native, season, episode))
+        } + rowsByRef[Triple(externalCanonical(value.contentId), season, episode)].orEmpty()
+        val starts = sourceRows.map(::edge).toSet()
+        val linked = episodeClosure(starts)
+        if (linked.isEmpty()) return value
+        val candidates = if (target == null) linked else linked.filter {
+            it.native == target || externalCanonical(it.canonical) == externalCanonical(target)
+        }
+        val selected = candidates.sortedWith(compareBy<ExternalEpisode> { if (target != null && it.canonical == target) 0 else 1 }
+            .thenBy { it.alias }.thenBy { if (nativePlaybackId(it.canonical)) 1 else 0 }
+            .thenBy { if (externalCanonical(it.canonical).startsWith("tt")) 0 else 1 }
+            .thenBy { externalCanonical(it.canonical) }.thenBy { it.canonicalSeason }.thenBy { it.canonicalEpisode }).firstOrNull() ?: return value
+        if (target == selected.native) {
+            if (ambiguousExternalCoordinate(target, selected.nativeSeason, selected.nativeEpisode)) return value
+            return value.copy(contentId = target, videoId = selected.nativeVideo, season = selected.nativeSeason, episode = selected.nativeEpisode)
+        }
+        val id = target ?: externalCanonical(selected.canonical)
+        val builtin = entries.value.firstOrNull { it.native == id }
+        if (builtin != null && (selected.canonicalSeason to selected.canonicalEpisode) !in builtin.episodes) return value
+        val video = builtin?.episodes?.get(selected.canonicalSeason to selected.canonicalEpisode)
+            ?: selected.canonicalVideo?.takeIf { id == selected.canonical }
+            ?: "$id:${selected.canonicalSeason}:${selected.canonicalEpisode}"
+        if (id == value.contentId && selected.canonicalSeason == value.season && selected.canonicalEpisode == value.episode) return value
+        return value.copy(contentId = id, videoId = video, season = selected.canonicalSeason, episode = selected.canonicalEpisode)
     }
     private val artworkPrefs = context.getSharedPreferences("builtin_artwork_identity_v1", Context.MODE_PRIVATE)
     internal val artwork = MutableStateFlow(artworkPrefs.all.mapNotNull { (id, value) ->
@@ -214,24 +276,35 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
             (target == null || (season to episode) in target.episodes)
     }
     @Synchronized internal fun progress(value: WatchProgress, requestedTarget: String? = null): WatchProgress {
+        if (entries.value.any { it.native == value.contentId } &&
+            !canProjectEpisode(value.contentId, canonical(value.contentId, true), value.season, value.episode)) return value
         if (requestedTarget?.startsWith("xt_") == true) {
             val normalized = progress(value)
-            if (entries.value.any { it.native == value.contentId } && normalized.contentId == value.contentId) return value
             val projected = externalProgress(normalized, requestedTarget)
             return if (projected.contentId == requestedTarget) projected else value
         }
-        val input = if (value.contentType in setOf("series", "tv") && !value.contentId.startsWith("xt_") &&
-            (!nativePlaybackId(value.contentId) || (entries.value.none { it.native == value.contentId } &&
-                externalRows.any { it.canonical == value.contentId &&
-                    it.canonicalSeason == value.season && it.canonicalEpisode == value.episode })) &&
-            externalRows.any { externalCanonical(it.canonical) == externalCanonical(value.contentId) }) {
-            val id = externalCanonical(value.contentId)
-            if (id != value.contentId && value.season != null && value.episode != null)
-                value.copy(contentId = id, videoId = "$id:${value.season}:${value.episode}") else value
-        } else value
-        val progress = externalProgress(input, requestedTarget)
+        var progress = externalProgress(value, requestedTarget)
+        if (progress == value && hasExternalCoordinate(value.contentId, value.season, value.episode) &&
+            requestedTarget == null && hasPartBinding(value.contentId)) return value
+        if (progress == value && !hasExternalCoordinate(value.contentId, value.season, value.episode) &&
+            entries.value.any { it.native == value.contentId }) {
+            val parent = canonical(value.contentId, true)
+            if (parent != value.contentId && value.season != null && value.episode != null) {
+                val mapped = externalProgress(value.copy(contentId = parent, videoId = "$parent:${value.season}:${value.episode}"), requestedTarget)
+                if (requestedTarget == null || !hasPartBinding(requestedTarget) || mapped.contentId == requestedTarget) progress = mapped
+            }
+        }
+        if (requestedTarget != null && progress == value && !hasPartBinding(requestedTarget)) {
+            val mapped = externalProgress(value)
+            if (mapped != value && requestedTarget in related(mapped.contentId, true) &&
+                canProjectEpisode(mapped.contentId, requestedTarget, mapped.season, mapped.episode)) progress = mapped
+        }
+        if (requestedTarget != null && progress.contentId != requestedTarget && progress == value &&
+            (hasPartBinding(requestedTarget) || hasPartBinding(value.contentId))) return value
         if (value.contentId.startsWith("xt_") && progress.contentId.startsWith("xt_") &&
             requestedTarget != null && requestedTarget != value.contentId) return value
+        if (requestedTarget == null && hasPartBinding(progress.contentId) &&
+            hasExternalCoordinate(progress.contentId, progress.season, progress.episode)) return progress
         val target = requestedTarget ?: canonical(progress.contentId, progress.contentType in setOf("series", "tv"))
         if (target != progress.contentId && externalCanonical(target) == externalCanonical(progress.contentId) &&
             entries.value.none { it.native == target || it.native == progress.contentId } &&
@@ -250,4 +323,9 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     internal fun project(items: List<WatchProgress>): List<WatchProgress> = items.map { progress(it) }
         .groupBy { Triple(it.contentId, it.season, it.episode) }.values
         .mapNotNull { group -> group.maxByOrNull { it.lastWatched } }.sortedByDescending { it.lastWatched }
+    internal fun watched(item: WatchedItem, target: String? = null): WatchedItem {
+        val mapped = progress(WatchProgress(item.contentId, item.contentType, item.title, item.poster, null, null,
+            item.contentId, item.season, item.episode, null, 0, 0, item.watchedAt), target)
+        return item.copy(contentId = mapped.contentId, season = mapped.season, episode = mapped.episode)
+    }
 }

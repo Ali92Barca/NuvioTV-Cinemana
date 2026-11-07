@@ -89,6 +89,39 @@ class SharedPlaybackIdentityTest {
         assertEquals(native, registry.progress(progress("tmdb:123", series = true), native).contentId)
         assertEquals("tt999", registry.progress(progress("tt999", series = true)).contentId)
     }
+    @Test fun `a duplicate TMDB part aliases the existing second season without joining first season episodes`() {
+        val source = "https://example.test/a"
+        val native = "xt_s_src_42"
+        val duplicate = "tmdb:tv:338743"
+        registry.learnExternalEpisode(source, native, "$native:1:1", 1, 1, "tt100", 1, 1)
+        registry.learnExternalEpisode(source, native, "$native:2:1", 2, 1, "tt100", 2, 1)
+        registry.learnExternalSeason(source, native, duplicate, 2, 1, listOf(Triple(1, "$native:2:1", 1)), allowPartAlias = true)
+        registry.learnExternalSeason(source, native, "cinemana-series:22", 2, 1,
+            listOf(Triple(1, "$native:2:1", 1)), allowPartAlias = true, canonicalVideos = mapOf(1 to "cinemana:2201"))
+        val raw = progress(native, series = true).copy(season = 2)
+        assertEquals("tt100:2:1", registry.progress(raw).videoId)
+        assertEquals("tt100:2:1", registry.progress(progress(duplicate, series = true)).videoId)
+        val card = registry.progress(progress("tt100", series = true).copy(season = 2), duplicate)
+        assertEquals(duplicate, card.contentId)
+        assertEquals(1, card.season)
+        assertEquals("tt100", registry.progress(progress("tt100", series = true), duplicate).contentId)
+        assertEquals("cinemana:2201", registry.progress(raw, "cinemana-series:22").videoId)
+        assertEquals(2 to 1, registry.externalQuery(duplicate, "tt100", 1, 1))
+        val flags = registry.watched(WatchedItem("tt100", "series", "Show", 2, 1, 1), duplicate)
+        assertEquals(duplicate, flags.contentId)
+        assertEquals(1, flags.season)
+        assertEquals("tt100", registry.watched(WatchedItem("tt100", "series", "Show", 1, 1, 1), duplicate).contentId)
+    }
+    @Test fun `a native primary identity can be learned after the part card and survives restart`() {
+        val native = "xt_s_src_42"
+        registry.learnExternalSeason("https://example.test/a", native, "tmdb:tv:338743", 2, 1,
+            listOf(Triple(1, "$native:2:1", 1)), allowPartAlias = true)
+        registry.learnExternalEpisode("https://example.test/a", native, "$native:2:1", 2, 1, "tt100", 2, 1)
+        val restarted = SharedPlaybackIdentity(context)
+        val row = restarted.progress(progress("tmdb:tv:338743", series = true))
+        assertEquals("tt100", row.contentId)
+        assertEquals(2, row.season)
+    }
     @Test fun `Xtream episode reads and writes preserve explicit profile and part coordinates`() = runTest {
         val native = "xt_s_src_42"
         registry.learnExternalEpisode("https://example.test/a", native, "$native:2:1", 2, 1, "tt202", 1, 1)
