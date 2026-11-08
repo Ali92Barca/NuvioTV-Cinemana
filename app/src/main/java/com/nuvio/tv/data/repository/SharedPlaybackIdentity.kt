@@ -139,6 +139,16 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         val touched = (rowsByTitle[id].orEmpty() + rowsByTitle[externalCanonical(id)].orEmpty()).map(::edge).toSet()
         return setOf(id) + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) }
     }
+
+    /** Artwork reuses verified primary work identities; numbered-part aliases cannot replace it. */
+    @Synchronized internal fun externalPosterImdb(id: String, baseUrl: String?): String? {
+        indexExternal()
+        val scope = baseUrl?.let(::sourceScope)
+        return rowsByTitle[id].orEmpty().filter {
+            it.native == id && !it.alias && (scope == null || it.scope == scope)
+        }.map { externalCanonical(it.canonical) }.distinct().singleOrNull()
+            ?.takeIf { Regex("tt[0-9]+").matches(it) }
+    }
     @Synchronized internal fun hasPartBinding(id: String): Boolean {
         indexExternal()
         return id in partIds || externalCanonical(id) in partIds

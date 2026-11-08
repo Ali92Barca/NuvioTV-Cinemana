@@ -69,10 +69,13 @@ class BuiltinCatalogPosters @Inject constructor(
     internal fun request(id: String, type: String) = resolver.prioritizePoster(id, type)
     internal fun verifySeries(id: String) = resolver.verifySeriesPoster(id)
 
-    internal fun observe(id: String, movie: Boolean) = combine(
+    internal fun observe(id: String, movie: Boolean, sourceBaseUrl: String? = null) = combine(
         identities.entries, identities.artwork, arabic, watchedMovies,
-        combine(seriesWatchState, resolver.seriesPosterCandidates) { series, candidates -> series to candidates }
+        combine(seriesWatchState, resolver.seriesPosterCandidates, identities.externalRevision) { series, candidates, _ -> series to candidates }
     ) { entries, artwork, ar, watched, (series, candidates) ->
+        if (id.startsWith("xt_")) {
+            return@combine BuiltinPosterState(identities.externalPosterImdb(id, sourceBaseUrl)?.let { betterPosterUrl(it, ar) })
+        }
         val verified = entries.firstOrNull { it.native == id && it.series == !movie }
         val imdb = artwork[id] ?: verified?.canonical
         val completed = if (movie) watched?.contains(id) else verified
@@ -104,16 +107,19 @@ internal val LocalBuiltinCatalogPosters = staticCompositionLocalOf<BuiltinCatalo
 @Composable
 internal fun rememberBuiltinPoster(item: MetaPreview): BuiltinPosterState {
     val posters = LocalBuiltinCatalogPosters.current ?: return BuiltinPosterState()
-    if (!nativePlaybackId(item.id)) return BuiltinPosterState()
+    val external = item.id.startsWith("xt_")
+    if (!external && !nativePlaybackId(item.id)) return BuiltinPosterState()
     val movie = item.apiType == "movie"
-    val updates = remember(posters, item.id, movie) { posters.observe(item.id, movie) }
+    val updates = remember(posters, item.id, movie, item.sourceAddonBaseUrl) { posters.observe(item.id, movie, item.sourceAddonBaseUrl) }
     return key(item.id, movie) {
         val state by updates.collectAsState(BuiltinPosterState())
         LaunchedEffect(posters, item.id, item.apiType) {
+            if (external) return@LaunchedEffect // Cached matches only: no metadata or TMDB request for a poster.
             delay(450)
             posters.request(item.id, item.apiType)
         }
         LaunchedEffect(posters, item.id, state.needsEpisodeVerification) {
+            if (external) return@LaunchedEffect
             if (state.needsEpisodeVerification) posters.verifySeries(item.id)
         }
         state

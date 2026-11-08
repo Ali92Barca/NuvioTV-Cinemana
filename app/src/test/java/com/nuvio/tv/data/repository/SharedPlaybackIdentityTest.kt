@@ -99,6 +99,20 @@ class SharedPlaybackIdentityTest {
             addonBaseUrl = "https://example.test/b")).contentId)
         assertEquals(native, SharedPlaybackIdentity(context).progress(raw.copy(season = 3, episode = 8)).contentId)
     }
+    @Test fun `IPTV posters reuse only a unique scoped primary identity and ignore duplicate part aliases`() {
+        val native = "xt_s_src_42"
+        val source = "https://example.test/a"
+        registry.learnExternalEpisode(source, native, "$native:1:1", 1, 1, "tt101", 1, 1)
+        registry.learnExternalSeason(source, native, "tmdb:tv:2", 2, 1,
+            listOf(Triple(1, "$native:2:1", 1)), allowPartAlias = true)
+        assertEquals("tt101", registry.externalPosterImdb(native, source))
+        registry.learnExternalEpisode("https://example.test/b", native, "$native:1:1", 1, 1, "tt202", 1, 1)
+        assertNull(registry.externalPosterImdb(native, null))
+        assertEquals("tt101", registry.externalPosterImdb(native, source))
+        assertEquals("tt202", registry.externalPosterImdb(native, "https://example.test/b"))
+        assertNull(registry.externalPosterImdb(native, "https://example.test/missing"))
+        assertEquals("tt101", SharedPlaybackIdentity(context).externalPosterImdb(native, source))
+    }
     @Test fun `same Xtream id in two subscriptions requires matching source scope`() {
         val native = "xt_s_src_42"
         registry.learnExternalEpisode("https://example.test/account-a", native, "$native:1:1", 1, 1, "tt101", 1, 1)

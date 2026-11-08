@@ -25,7 +25,7 @@ internal fun BuiltinPosterLanguagePreference() {
     var open by remember { mutableStateOf(false) }
     SettingsActionRow(
         title = "لغة البوسترات",
-        subtitle = "بوسترات BetterPosters في كاتلوغات Cinemana وCee",
+        subtitle = "بوسترات BetterPosters لـCinemana وCee وأعمال IPTV المطابقة",
         value = if (arabic) "العربية" else "الإنكليزية",
         onClick = { open = true }
     )

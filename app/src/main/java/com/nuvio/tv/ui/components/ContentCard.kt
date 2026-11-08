@@ -115,6 +115,7 @@ fun ContentCard(
     onClick: () -> Unit = {}
 ) {
     val builtinPoster = rememberBuiltinPoster(item)
+    val (posterVisible, posterVisibilityModifier) = rememberIptvPosterVisibility(item.id.startsWith("xt_") && builtinPoster.url != null)
     val portraitUrl = builtinPoster.url ?: item.poster
     val cardShape = remember(posterCardStyle.cornerRadius) { RoundedCornerShape(posterCardStyle.cornerRadius) }
     val cardDepthStyle = LocalCardDepthStyle.current
@@ -270,7 +271,7 @@ fun ContentCard(
         }
         val revalidationKey = com.nuvio.tv.core.image.rememberImageRevalidationKey(imageUrl)
         val fallbackUrl = if (imageUrl == builtinPoster.url) item.rawPosterUrl ?: item.poster else item.rawPosterUrl
-        val imageModel = remember(imageUrl, fallbackUrl, requestWidthPx, requestHeightPx, revalidationKey) {
+        val targetImageModel = remember(imageUrl, fallbackUrl, requestWidthPx, requestHeightPx, revalidationKey) {
             val builder = ImageRequest.Builder(context)
                 .data(imageUrl)
                 .crossfade(com.nuvio.tv.core.image.imageTransitionsEnabled(context))
@@ -286,6 +287,9 @@ fun ContentCard(
             }
             builder.build()
         }
+        val imageModel = rememberProgressiveIptvPoster(targetImageModel, item.poster, requestWidthPx, requestHeightPx,
+            item.id.startsWith("xt_") && builtinPoster.url != null && imageUrl == builtinPoster.url, posterVisible,
+            item.id to item.sourceAddonBaseUrl)
         val logoRequestHeightPx = remember(density) {
             with(density) { NuvioTheme.spacing.xxxl.roundToPx() }
         }
@@ -315,6 +319,7 @@ fun ContentCard(
             },
             modifier = Modifier
                 .fillMaxWidth()
+                .then(posterVisibilityModifier)
                 .onFocusChanged { state ->
                     val focusedNow = state.isFocused
                     if (needsFocusState) {

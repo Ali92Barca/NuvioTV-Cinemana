@@ -81,6 +81,7 @@ fun GridContentCard(
     onFocused: () -> Unit = {}
 ) {
     val builtinPoster = rememberBuiltinPoster(item)
+    val (posterVisible, posterVisibilityModifier) = rememberIptvPosterVisibility(item.id.startsWith("xt_") && builtinPoster.url != null)
     val portraitUrl = builtinPoster.url ?: item.poster
     val cardShape = remember(posterCardStyle.cornerRadius) { RoundedCornerShape(posterCardStyle.cornerRadius) }
     val cardDepthStyle = LocalCardDepthStyle.current
@@ -127,6 +128,7 @@ fun GridContentCard(
                 }
             },
             modifier = Modifier
+                .then(posterVisibilityModifier)
                 .then(
                     if (globalLandscape) Modifier.fillMaxWidth().aspectRatio(PosterShape.LANDSCAPE.aspectRatio())
                     else Modifier.width(posterCardStyle.width).height(cardHeight)
@@ -217,7 +219,7 @@ fun GridContentCard(
                 }
                 val revalidationKey = com.nuvio.tv.core.image.rememberImageRevalidationKey(effectiveImageUrl)
                 val fallbackUrl = if (effectiveImageUrl == builtinPoster.url) item.rawPosterUrl ?: item.poster else item.rawPosterUrl
-                val imageModel = remember(effectiveImageUrl, fallbackUrl, requestWidthPx, requestHeightPx, revalidationKey) {
+                val targetImageModel = remember(effectiveImageUrl, fallbackUrl, requestWidthPx, requestHeightPx, revalidationKey) {
                     val builder = ImageRequest.Builder(context)
                         .data(effectiveImageUrl)
                         .crossfade(imageCrossfade)
@@ -233,6 +235,9 @@ fun GridContentCard(
                     }
                     builder.build()
                 }
+                val imageModel = rememberProgressiveIptvPoster(targetImageModel, item.poster, requestWidthPx, requestHeightPx,
+                    item.id.startsWith("xt_") && builtinPoster.url != null && effectiveImageUrl == builtinPoster.url, posterVisible,
+                    item.id to item.sourceAddonBaseUrl)
                 if (effectiveImageUrl.isNullOrBlank()) {
                     MonochromePosterPlaceholder(contentDescription = item.name)
                 } else {
