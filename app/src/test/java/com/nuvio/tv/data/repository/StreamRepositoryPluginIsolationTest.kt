@@ -25,6 +25,9 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +41,78 @@ import org.junit.Test
 import retrofit2.Response
 
 class StreamRepositoryPluginIsolationTest {
+    private fun seriesCanonical() = mockk<com.nuvio.tv.domain.model.Meta> {
+        every { name } returns "Series"
+        every { releaseInfo } returns "2020"
+        every { released } returns null
+        every { imdbId } returns "tt101"
+        every { tmdbId } returns "9"
+        every { videos } returns (1..2).map { com.nuvio.tv.domain.model.Video("tt101:1:$it", "Episode $it",
+            null, null, season = 1, episode = it, overview = null) }
+    }
+    private fun nativeMeta(id: String) = Response.success(com.nuvio.tv.data.remote.dto.MetaResponseDto(
+        com.nuvio.tv.data.remote.dto.MetaDto(id, "series", "Series", videos = (1..2).map {
+            com.nuvio.tv.data.remote.dto.VideoDto("$id:1:$it", title = "Episode $it", season = 1, episode = it)
+        })))
+    @Test fun `native IPTV links appear while another edition is still resolving and then merge without duplicates`() = runBlocking {
+        val addon = compatibleAddon().copy(
+            catalogs = listOf(com.nuvio.tv.domain.model.CatalogDescriptor(com.nuvio.tv.domain.model.ContentType.SERIES,
+                id = "search", name = "Search", extra = listOf(com.nuvio.tv.domain.model.CatalogExtra("search")))),
+            resources = listOf(AddonResource("stream", listOf("series"), listOf("tt", "xt_"))))
+        val harness = newHarness(emptyList(), addon, seriesCanonical())
+        val slow = CompletableDeferred<Response<com.nuvio.tv.data.remote.dto.MetaResponseDto>>()
+        coEvery { harness.api.getCatalog(any()) } returns Response.success(com.nuvio.tv.data.remote.dto.CatalogResponseDto(
+            listOf("xt_s_src_42", "xt_s_src_43").map { com.nuvio.tv.data.remote.dto.MetaPreviewDto(it, "series", "Series", releaseInfo = "2020") }))
+        coEvery { harness.api.getMeta(match { it.contains("xt_s_src_42") }) } returns nativeMeta("xt_s_src_42")
+        coEvery { harness.api.getMeta(match { it.contains("xt_s_src_43") }) } coAnswers { slow.await() }
+        coEvery { harness.api.getStreams(match { it.contains("xt_s_src_42") }) } returns Response.success(
+            StreamResponseDto(listOf(StreamDto(url = "https://stream.example/first.m3u8"))))
+        coEvery { harness.api.getStreams(match { it.contains("xt_s_src_43") }) } returns Response.success(
+            StreamResponseDto(listOf(StreamDto(url = "https://stream.example/second.m3u8"))))
+        val first = CompletableDeferred<List<AddonStreams>>()
+        val both = CompletableDeferred<List<AddonStreams>>()
+        val collector = launch {
+            harness.repository.getStreamsFromAllAddons("series", "tt101:1:1", 1, 1).collect { result ->
+                if (result is NetworkResult.Success) {
+                    val urls = result.data.flatMap { it.streams }.map { it.url }
+                    if ("https://stream.example/first.m3u8" in urls) first.complete(result.data)
+                    if ("https://stream.example/second.m3u8" in urls) both.complete(result.data)
+                }
+            }
+        }
+        try {
+            assertEquals(1, withTimeout(3_000) { first.await() }.single().streams.size)
+            assertTrue(slow.isActive)
+            slow.complete(nativeMeta("xt_s_src_43"))
+            assertEquals(2, withTimeout(3_000) { both.await() }.single().streams.size)
+            coVerify(exactly = 2) { harness.api.getStreams(any()) }
+        } finally {
+            slow.complete(nativeMeta("xt_s_src_43"))
+            collector.cancelAndJoin()
+        }
+    }
+    @Test fun `direct movie links appear while native movie search is still pending`() = runBlocking {
+        val addon = compatibleAddon().copy(
+            catalogs = listOf(com.nuvio.tv.domain.model.CatalogDescriptor(com.nuvio.tv.domain.model.ContentType.MOVIE,
+                id = "search", name = "Search", extra = listOf(com.nuvio.tv.domain.model.CatalogExtra("search")))),
+            resources = listOf(AddonResource("stream", listOf("movie"), listOf("tt", "xt_"))))
+        val canonical = mockk<com.nuvio.tv.domain.model.Meta> {
+            every { name } returns "Movie"
+            every { releaseInfo } returns "2020"
+            every { released } returns null
+            every { imdbId } returns "tt1341338"
+            every { tmdbId } returns "9"
+        }
+        val harness = newHarness(emptyList(), addon, canonical)
+        val slow = CompletableDeferred<Response<com.nuvio.tv.data.remote.dto.CatalogResponseDto>>()
+        coEvery { harness.api.getCatalog(any()) } coAnswers { slow.await() }
+        try {
+            val ready = withTimeout(3_000) { harness.repository.getStreamsFromAllAddons("movie", "tt1341338", null, null)
+                .first { it is NetworkResult.Success } } as NetworkResult.Success
+            assertEquals(1, ready.data.single().streams.size)
+            assertTrue(slow.isActive)
+        } finally { slow.complete(Response.success(com.nuvio.tv.data.remote.dto.CatalogResponseDto(emptyList()))) }
+    }
     @Test fun `canonical Xtream episode requests use verified native IDs without a discarded canonical request`() = verifyNativeSearch(false)
     @Test fun `cold metadata cache still resolves native IPTV instead of returning unverified direct links`() = verifyNativeSearch(true)
     private fun verifyNativeSearch(coldCache: Boolean) = runTest {

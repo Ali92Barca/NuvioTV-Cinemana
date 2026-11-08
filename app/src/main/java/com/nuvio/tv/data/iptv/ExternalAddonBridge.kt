@@ -43,7 +43,8 @@ class ExternalAddonBridge @Inject constructor(
     suspend fun resolve(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?) =
         resolveAll(addon, type, canonical, season, episode).singleOrNull()
 
-    suspend fun resolveAll(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?): List<String> {
+    suspend fun resolveAll(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?,
+        onResolved: (suspend (String) -> Unit)? = null): List<String> {
         val accepted = linkedSetOf<String>()
         return withTimeoutOrNull(25_000) {
             val info = info(canonical, type)
@@ -144,17 +145,20 @@ class ExternalAddonBridge @Inject constructor(
                 for (value in candidates.take(12)) {
                     if (!seen.add(value.originalId)) continue
                     val resolved = resolveCandidate(value) ?: continue
-                    accepted += resolved.first
+                    if (accepted.add(resolved.first)) onResolved?.invoke(resolved.first)
                     // A verified translated edition satisfies the requested Turkish episode.
                     // Do not keep searching foreign/dubbed editions after finding it.
-                    if (info.turkish && resolved.second) return@withTimeoutOrNull accepted.toList()
+                    if (onResolved == null && info.turkish && resolved.second) return@withTimeoutOrNull accepted.toList()
                 }
             }
             if (type == "movie") {
                 val match = ExternalAddonTitleMatcher.choose(titles.toList(), expectedYear,
                     rows.mapNotNull(::candidate).distinct(), info.imdbId, info.tmdbId)
                     as? ExternalAddonTitleMatcher.Decision.Matched
-                if (match == null) emptyList() else listOf(match.candidate.originalId)
+                if (match == null) emptyList() else {
+                    if (accepted.add(match.candidate.originalId)) onResolved?.invoke(match.candidate.originalId)
+                    accepted.toList()
+                }
             } else accepted.toList()
         } ?: accepted.toList() // A slow later candidate must not discard an already verified episode.
     }

@@ -226,12 +226,25 @@ class StreamRepositoryImpl @Inject constructor(
                 // Launch addon jobs
                 streamAddons.forEach { addon ->
                     launch {
+                        val addonScope = this
+                        val nativeRequests = mutableListOf<kotlinx.coroutines.Deferred<List<Stream>>>()
+                        val emittedKeys = mutableSetOf<String>()
+                        val emissionMutex = kotlinx.coroutines.sync.Mutex()
+                        suspend fun publishAvailable(streams: List<Stream>) {
+                            emissionMutex.lock()
+                            try {
+                                val fresh = streams.filter { emittedKeys.add(it.dedupKey()) }
+                                    .map { it.copy(addonName = addon.displayName, addonLogo = addon.logo) }
+                                if (fresh.isNotEmpty()) resultChannel.send(AddonStreams(addon.displayName, addon.logo, fresh))
+                            } finally { emissionMutex.unlock() }
+                        }
                         try {
                             val requestedId = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(addon.id, type, videoId, parentMetaId, season, episode)
                             val searchNative = externalAddonBridge.isXtream(addon) && !requestedId.startsWith("xt_")
                             val directResult = if (!(searchNative && type == "series") && addon.supportsStreamResource(type, requestedId)) {
                                 getStreamsFromAddon(addon, type, requestedId)
                             } else NetworkResult.Success(emptyList<Stream>())
+                            if (directResult is NetworkResult.Success) publishAvailable(directResult.data)
                             val needsSearch = (directResult is NetworkResult.Success && directResult.data.isEmpty()) ||
                                 (directResult is NetworkResult.Error && directResult.code == 404)
                             val streamsResult = if ((needsSearch || searchNative) &&
@@ -248,10 +261,22 @@ class StreamRepositoryImpl @Inject constructor(
                                 if (canonical == null) {
                                     if (searchNative && type == "series") NetworkResult.Success(emptyList()) else directResult
                                 } else {
-                                    val nativeIds = externalAddonBridge.resolveAll(addon, type, canonical, season, episode)
-                                    val verified = nativeIds.filter { addon.supportsStreamResource(type, it) }.flatMap { nativeId ->
-                                        (getStreamsFromAddon(addon, type, nativeId) as? NetworkResult.Success<List<Stream>>)?.data.orEmpty()
+                                    val scheduledIds = mutableSetOf<String>()
+                                    fun enqueueNative(nativeId: String) {
+                                        if (!addon.supportsStreamResource(type, nativeId) || !scheduledIds.add(nativeId)) return
+                                        nativeRequests += addonScope.async {
+                                            try {
+                                                val streams = (getStreamsFromAddon(addon, type, nativeId)
+                                                    as? NetworkResult.Success<List<Stream>>)?.data.orEmpty()
+                                                publishAvailable(streams)
+                                                streams
+                                            } catch (cancelled: CancellationException) { throw cancelled }
+                                            catch (_: Exception) { emptyList() }
+                                        }
                                     }
+                                    val nativeIds = externalAddonBridge.resolveAll(addon, type, canonical, season, episode) { enqueueNative(it) }
+                                    nativeIds.forEach(::enqueueNative)
+                                    val verified = nativeRequests.flatMap { it.await() }
                                     if (searchNative && type == "series") NetworkResult.Success(verified.distinctBy { it.url })
                                     else NetworkResult.Success(((directResult as? NetworkResult.Success<List<Stream>>)?.data.orEmpty() + verified).distinctBy { it.url })
                                 }
@@ -259,16 +284,7 @@ class StreamRepositoryImpl @Inject constructor(
                             when (streamsResult) {
                                 is NetworkResult.Success -> {
                                     if (streamsResult.data.isNotEmpty()) {
-                                        val namedStreams = streamsResult.data.map {
-                                            it.copy(addonName = addon.displayName, addonLogo = addon.logo)
-                                        }
-                                        resultChannel.send(
-                                            AddonStreams(
-                                                addonName = addon.displayName,
-                                                addonLogo = addon.logo,
-                                                streams = namedStreams
-                                            )
-                                        )
+                                        publishAvailable(streamsResult.data)
                                     } else {
                                         // Stream endpoint returned empty - try inline
                                         // streams from meta response as fallback.
@@ -302,6 +318,7 @@ class StreamRepositoryImpl @Inject constructor(
                                 detail = context.getString(com.nuvio.tv.R.string.stream_error_detail_addon_request_failed)
                             )
                         } finally {
+                            nativeRequests.forEach { it.join() }
                             if (completedJobs.incrementAndGet() >= totalJobs) {
                                 resultChannel.close()
                             }
