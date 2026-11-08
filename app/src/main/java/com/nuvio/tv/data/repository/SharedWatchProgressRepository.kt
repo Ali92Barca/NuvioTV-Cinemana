@@ -19,6 +19,7 @@ class SharedWatchProgressRepository @Inject constructor(
     private val resolver: SharedPlaybackResolver,
     private val profiles: ProfileManager
 ) : WatchProgressRepository by delegate {
+    private fun localNativeIdentity(id: String) = nativePlaybackId(id) || externalMovieId(id) || id.startsWith("xt_s_")
     private val identityChanges = combine(identities.entries, identities.externalRevision) { rows, _ -> rows }
     private fun <T> observe(id: String, block: (Set<String>) -> Flow<T>): Flow<T> = flow {
         resolver.resolve(id)
@@ -48,7 +49,7 @@ class SharedWatchProgressRepository @Inject constructor(
     }.flowOn(Dispatchers.Default)
     override fun getProgress(contentId: String) = profiles.activeProfileId.flatMapLatest { getProgress(contentId, it) }
     override fun getProgress(contentId: String, profileId: Int): Flow<WatchProgress?> = observe(contentId) { ids ->
-        val legacy = if (ids.size > 1) ids.filter(::nativePlaybackId).map { delegate.localIdentityProgress(it, null, null, profileId) } else emptyList()
+        val legacy = if (ids.size > 1) ids.filter(::localNativeIdentity).map { delegate.localIdentityProgress(it, null, null, profileId) } else emptyList()
         val partHistory = if (ids.any { identities.hasPartBinding(it) }) ids.map { id ->
             delegate.getAllEpisodeProgress(id, profileId).map { episodes -> episodes.values.map { identities.progress(it, contentId) }
                 .filter { it.contentId == contentId }.maxByOrNull { it.lastWatched } }
@@ -61,7 +62,11 @@ class SharedWatchProgressRepository @Inject constructor(
     override fun getEpisodeProgress(contentId: String, season: Int, episode: Int) =
         profiles.activeProfileId.flatMapLatest { getEpisodeProgress(contentId, season, episode, it) }
     override fun getEpisodeProgress(contentId: String, season: Int, episode: Int, profileId: Int): Flow<WatchProgress?> = observe(contentId) { ids ->
-        val legacy = if (ids.size > 1) ids.filter(::nativePlaybackId).map { delegate.localIdentityProgress(it, season, episode, profileId) } else emptyList()
+        val legacy = if (ids.size > 1) ids.filter(::localNativeIdentity).mapNotNull { target ->
+            val query = identities.externalQuery(contentId, target, season, episode)
+            if (target.startsWith("xt_") && query == null) null
+            else delegate.localIdentityProgress(target, query?.first ?: season, query?.second ?: episode, profileId)
+        } else emptyList()
         combine(ids.mapNotNull { target ->
             val query = identities.externalQuery(contentId, target, season, episode)
             if (target != contentId && (contentId.startsWith("xt_") || target.startsWith("xt_") || identities.hasPartBinding(contentId) || identities.hasPartBinding(target)) && query == null) null
@@ -73,7 +78,7 @@ class SharedWatchProgressRepository @Inject constructor(
     }
     override fun getAllEpisodeProgress(contentId: String) = profiles.activeProfileId.flatMapLatest { getAllEpisodeProgress(contentId, it) }
     override fun getAllEpisodeProgress(contentId: String, profileId: Int): Flow<Map<Pair<Int, Int>, WatchProgress>> = observe(contentId) { ids ->
-        val legacy = if (ids.size > 1) ids.filter(::nativePlaybackId).map { delegate.localIdentityEpisodes(it, profileId) } else emptyList()
+        val legacy = if (ids.size > 1) ids.filter(::localNativeIdentity).map { delegate.localIdentityEpisodes(it, profileId) } else emptyList()
         combine(ids.map { delegate.getAllEpisodeProgress(it, profileId) } + legacy) { maps ->
             maps.flatMap { it.values }.map { identities.progress(it, contentId) }
                 .mapNotNull { item -> item.season?.let { s -> item.episode?.let { e -> (s to e) to item } } }

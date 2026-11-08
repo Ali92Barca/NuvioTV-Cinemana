@@ -395,6 +395,31 @@ class SharedPlaybackIdentityTest {
         every { backend.localIdentityProgress("cinemana:7", null, null, 1) } returns flowOf(progress("cinemana:7", 20))
         assertEquals(20L, repo.getProgress("tt1234", 1).first()?.lastWatched)
     }
+    @Test fun `legacy IPTV movie progress remains readable through its canonical card with a remote backend`() = runTest {
+        val native = "xt_m_src_42"
+        registry.learnExternalMovie("https://example.test", native, "123", "tt1234")
+        val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
+        val repo = repository(backend)
+        every { backend.getProgress(any(), 1) } returns flowOf(null)
+        every { backend.localIdentityProgress(native, null, null, 1) } returns flowOf(progress(native, 20))
+        val restored = repo.getProgress("tt1234", 1).first()
+        assertEquals("tt1234", restored?.contentId)
+        assertEquals(20L, restored?.lastWatched)
+    }
+    @Test fun `legacy cumulative IPTV episode resumes through canonical season and episode with a remote backend`() = runTest {
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode("https://example.test", native, "$native:2:36", 2, 36, "tt1234", 2, 8)
+        val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
+        val repo = repository(backend)
+        every { backend.getEpisodeProgress(any(), any(), any(), 1) } returns flowOf(null)
+        every { backend.localIdentityProgress(native, 2, 36, 1) } returns flowOf(
+            progress(native, 20, true).copy(season = 2, episode = 36, videoId = "$native:2:36"))
+        val restored = repo.getEpisodeProgress("tt1234", 2, 8, 1).first()
+        assertEquals("tt1234", restored?.contentId)
+        assertEquals(2, restored?.season)
+        assertEquals(8, restored?.episode)
+        assertEquals(20L, restored?.lastWatched)
+    }
     @Test fun `TMDB-only identity retains media type and is resolvable by tracking writers`() {
         registry.learn(meta("cinemana:7"), null)
         val id = registry.canonical("cinemana:7")
