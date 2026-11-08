@@ -129,42 +129,62 @@ class SharedWatchProgressRepository @Inject constructor(
         val profile = profiles.activeProfileId.value
         resolver.resolve(contentId)
         if (profiles.activeProfileId.value != profile) return
-        val aliases = episodeAliases(contentId, season, episode)
-        val canonical = identities.canonical(contentId).takeIf { it in aliases } ?: contentId
-        delegate.removeProgress(canonical, season, episode)
-        (aliases - canonical).forEach { delegate.removeLocalIdentityAlias(it, season, episode, false, profile) }
+        val (canonical, aliases) = withContext(Dispatchers.Default) { historyProjection(contentId, season, episode) }
+        if (profiles.activeProfileId.value != profile) return
+        delegate.removeProgress(canonical.contentId, canonical.season, canonical.episode)
+        aliases.filter { it.contentId != canonical.contentId }.forEach {
+            delegate.removeLocalIdentityAlias(it.contentId, it.season, it.episode, false, profile)
+        }
     }
     override suspend fun removeFromHistory(contentId: String, videoId: String?, season: Int?, episode: Int?) {
         val profile = profiles.activeProfileId.value
         resolver.resolve(contentId)
         if (profiles.activeProfileId.value != profile) return
-        val aliases = episodeAliases(contentId, season, episode)
-        val canonical = identities.canonical(contentId).takeIf { it in aliases } ?: contentId
-        delegate.removeFromHistory(canonical, if (canonical == contentId) videoId else null, season, episode)
-        (aliases - canonical).forEach { delegate.removeLocalIdentityAlias(it, season, episode, true, profile) }
+        val (canonical, aliases) = withContext(Dispatchers.Default) { historyProjection(contentId, season, episode) }
+        if (profiles.activeProfileId.value != profile) return
+        delegate.removeFromHistory(canonical.contentId, if (canonical.contentId == contentId) videoId else null, canonical.season, canonical.episode)
+        aliases.filter { it.contentId != canonical.contentId }.forEach {
+            delegate.removeLocalIdentityAlias(it.contentId, it.season, it.episode, true, profile)
+        }
     }
     override suspend fun removeFromHistoryBatch(contentId: String, videoId: String?, episodes: List<Triple<Int, Int, String?>>) {
         val profile = profiles.activeProfileId.value
         resolver.resolve(contentId)
         if (profiles.activeProfileId.value != profile) return
-        val canonical = identities.canonical(contentId)
-        val unique = episodes.distinctBy { it.first to it.second }
-        val byTarget = unique.groupBy { (s, e, _) ->
-            canonical.takeIf { it in episodeAliases(contentId, s, e) } ?: contentId
+        val projected = withContext(Dispatchers.Default) {
+            episodes.distinctBy { it.first to it.second }.map { item -> item to historyProjection(contentId, item.first, item.second) }
         }
+        if (profiles.activeProfileId.value != profile) return
+        val byTarget = projected.groupBy { it.second.first.contentId }
         byTarget.forEach { (target, items) ->
-            val mapped = items.map { (s, e, id) -> Triple(s, e, if (target == contentId) id else "$target:$s:$e") }
+            if (profiles.activeProfileId.value != profile) return
+            val mapped = items.map { (source, projection) ->
+                val row = projection.first
+                Triple(row.season!!, row.episode!!, if (target == contentId) source.third else "$target:${row.season}:${row.episode}")
+            }.distinctBy { it.first to it.second }
             delegate.removeFromHistoryBatch(target, videoId.takeIf { target == contentId }, mapped)
-            for ((s, e, _) in items) for (alias in episodeAliases(contentId, s, e) - target) {
-                delegate.removeLocalIdentityAlias(alias, s, e, true, profile)
+            for (alias in items.flatMap { it.second.second }.filter { it.contentId != target }
+                .distinctBy { Triple(it.contentId, it.season, it.episode) }) {
+                delegate.removeLocalIdentityAlias(alias.contentId, alias.season, alias.episode, true, profile)
             }
         }
     }
 
-    private fun episodeAliases(id: String, season: Int?, episode: Int?): Set<String> {
+    /** Resolve both the work and coordinates for writes, exactly as for displayed watched flags. */
+    private fun historyProjection(id: String, season: Int?, episode: Int?): Pair<WatchedItem, List<WatchedItem>> {
         val row = identities.entries.value.firstOrNull { it.native == id }
-        if (row?.partial == true && (season == null || episode == null)) return setOf(id)
-        return identities.related(id).filterTo(mutableSetOf()) { identities.canProjectEpisode(id, it, season, episode) }
+        val series = season != null || episode != null || row?.series == true || id.startsWith("xt_s_") ||
+            id.startsWith("tmdb:tv:") || id.startsWith("tmdb:series:")
+        val item = WatchedItem(id, if (series) "series" else "movie", "", season, episode, 0)
+        if (row?.partial == true && (season == null || episode == null)) return item to listOf(item)
+        val aliases = identities.related(id, series).flatMap { identities.externalRelated(it) }
+            .flatMap { identities.related(it, series) }.toSet().mapNotNull { target ->
+                identities.watched(item, target).takeIf { it.contentId == target }
+            }
+        val canonical = identities.watched(item).takeIf { projected -> aliases.any {
+            it.contentId == projected.contentId && it.season == projected.season && it.episode == projected.episode
+        } } ?: item
+        return canonical to aliases
     }
     override fun applyOptimisticWatchedMovie(ids: Set<String>, add: Boolean) = delegate.applyOptimisticWatchedMovie(identities.expand(ids), add)
     override fun revertOptimisticWatchedMovie(ids: Set<String>, add: Boolean) = delegate.revertOptimisticWatchedMovie(identities.expand(ids), add)

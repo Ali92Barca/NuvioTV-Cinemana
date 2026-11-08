@@ -313,7 +313,7 @@ class SharedPlaybackIdentityTest {
         assertFalse(verifiedEpisodeCoordinates(emptyList(), official))
     }
     private fun repository(delegate: WatchProgressRepositoryImpl, identities: SharedPlaybackIdentity = registry,
-        watched: List<WatchedItem> = emptyList()): SharedWatchProgressRepository {
+        watched: List<WatchedItem> = emptyList(), activeProfile: MutableStateFlow<Int> = MutableStateFlow(1)): SharedWatchProgressRepository {
         every { delegate.allProgress } returns flowOf(emptyList())
         every { delegate.continueWatching } returns flowOf(emptyList())
         every { delegate.watchedItems } returns flowOf(watched)
@@ -322,7 +322,7 @@ class SharedPlaybackIdentityTest {
         val resolver = mockk<SharedPlaybackResolver> {
             coEvery { resolve(any()) } coAnswers { registry.canonical(firstArg()) }
         }
-        val profiles = mockk<ProfileManager> { every { activeProfileId } returns MutableStateFlow(1) }
+        val profiles = mockk<ProfileManager> { every { activeProfileId } returns activeProfile }
         return SharedWatchProgressRepository(delegate, identities, resolver, profiles)
     }
     @Test fun `large watched history projects off collector thread and resolves each title only once`() = kotlinx.coroutines.runBlocking {
@@ -375,6 +375,56 @@ class SharedPlaybackIdentityTest {
         coVerify(exactly = 1) { backend.removeFromHistory("tt1234", null, null, null) }
         coVerify(exactly = 1) { backend.removeFromHistory(any(), any(), any(), any()) }
         coVerify(exactly = 1) { backend.removeLocalIdentityAlias("cinemana:7", null, null, true, 1) }
+    }
+    @Test fun `unmark from cumulative IPTV coordinates removes canonical watched episode once`() = runTest {
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode("https://example.test", native, "$native:2:36", 2, 36, "tt1234", 2, 8)
+        val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
+        repository(backend).removeFromHistory(native, "$native:2:36", 2, 36)
+        coVerify(exactly = 1) { backend.removeFromHistory("tt1234", null, 2, 8) }
+        coVerify(exactly = 1) { backend.removeFromHistory(any(), any(), any(), any()) }
+        coVerify(exactly = 1) { backend.removeLocalIdentityAlias(native, 2, 36, true, 1) }
+    }
+    @Test fun `unmark native second part removes only its separate TMDB card`() = runTest {
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode("https://example.test", native, "$native:1:1", 1, 1, "tmdb:tv:313314", 1, 1)
+        registry.learnExternalSeason("https://example.test", native, "tmdb:tv:338743", 2, 1,
+            listOf(Triple(1, "$native:2:1", 1)), allowPartAlias = true)
+        val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
+        repository(backend).removeFromHistory(native, "$native:2:1", 2, 1)
+        coVerify(exactly = 1) { backend.removeFromHistory("tmdb:tv:338743", null, 1, 1) }
+        coVerify(exactly = 1) { backend.removeFromHistory(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { backend.removeLocalIdentityAlias("tmdb:tv:313314", any(), any(), any(), any()) }
+    }
+    @Test fun `batch unmark maps cumulative episodes before dispatching canonical removal`() = runTest {
+        val native = "xt_s_src_42"
+        registry.learnExternalSeason("https://example.test", native, "tt1234", 2, 2,
+            listOf(Triple(36, "$native:2:36", 8), Triple(37, "$native:2:37", 9)))
+        val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
+        repository(backend).removeFromHistoryBatch(native, null, listOf(Triple(2,36,"$native:2:36"), Triple(2,37,"$native:2:37")))
+        coVerify(exactly = 1) { backend.removeFromHistoryBatch("tt1234", null,
+            listOf(Triple(2,8,"tt1234:2:8"), Triple(2,9,"tt1234:2:9"))) }
+        coVerify(exactly = 1) { backend.removeLocalIdentityAlias(native, 2, 36, true, 1) }
+        coVerify(exactly = 1) { backend.removeLocalIdentityAlias(native, 2, 37, true, 1) }
+    }
+    @Test fun `removing progress from native episode projects canonical and local coordinates separately`() = runTest {
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode("https://example.test", native, "$native:2:36", 2, 36, "tt1234", 2, 8)
+        val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
+        repository(backend).removeProgress(native, 2, 36)
+        coVerify(exactly = 1) { backend.removeProgress("tt1234", 2, 8) }
+        coVerify(exactly = 1) { backend.removeLocalIdentityAlias(native, 2, 36, false, 1) }
+    }
+    @Test fun `batch history removal stops dispatching after profile changes`() = runTest {
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode("https://example.test", native, "$native:1:1", 1, 1, "tt111", 1, 1)
+        registry.learnExternalEpisode("https://example.test", native, "$native:2:1", 2, 1, "tt222", 1, 1)
+        val active = MutableStateFlow(1)
+        val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
+        coEvery { backend.removeFromHistoryBatch(any(), any(), any()) } coAnswers { active.value = 2 }
+        repository(backend, activeProfile = active).removeFromHistoryBatch(native, null,
+            listOf(Triple(1,1,"$native:1:1"), Triple(2,1,"$native:2:1")))
+        coVerify(exactly = 1) { backend.removeFromHistoryBatch(any(), any(), any()) }
     }
     @Test fun `reads select newest alias progress and preserve requested source identity`() = runTest {
         registry.learn(meta("cinemana:7"), "tt1234")
