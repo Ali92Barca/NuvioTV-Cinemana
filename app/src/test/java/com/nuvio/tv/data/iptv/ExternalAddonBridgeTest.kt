@@ -100,6 +100,7 @@ class ExternalAddonBridgeTest {
         org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
         val tmdb = mockk<TmdbApi>()
         val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        every { identities.entries } returns kotlinx.coroutines.flow.MutableStateFlow<List<com.nuvio.tv.data.repository.PlaybackIdentity>>(emptyList())
         val source = addon().copy(resources = listOf(AddonResource("stream", listOf("movie"), listOf("xt_"))))
         val native = MetaDto("xt_v_src_42", "movie", "Example", releaseInfo = "2020", tmdbId = "42").toDomain("Movie")
         coEvery { tmdb.getMovieDetails(42, any(), any()) } returns Response.success(TmdbDetailsResponse(42, title = "Example", releaseDate = "2020-01-01"))
