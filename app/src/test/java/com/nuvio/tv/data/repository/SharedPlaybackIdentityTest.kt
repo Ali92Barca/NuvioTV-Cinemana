@@ -96,8 +96,19 @@ class SharedPlaybackIdentityTest {
         registry.learn(meta("cinemana-series:7", series = true, safe = true), "tt8888")
         registry.learnExternalMovie("https://example.test", "xt_v_src_42", "123", "tt1234")
         assertEquals(setOf("tmdb:123"), registry.related("tmdb:123"))
+        assertEquals(setOf("tmdb:123"), registry.externalRelated("tmdb:123"))
+        assertEquals("tt1234", registry.canonical("xt_v_src_42"))
         assertFalse("xt_v_src_42" in registry.related("tmdb:123", true))
         assertTrue("xt_v_src_42" in registry.related("tmdb:movie:123", false))
+    }
+
+    @Test fun `watched TV episodes cannot cross a numeric TMDB movie collision`() = kotlinx.coroutines.runBlocking {
+        registry.learn(meta("cinemana-series:7", series = true, safe = true), "tt8888")
+        registry.learnExternalMovie("https://example.test", "xt_v_src_42", "123", "tt1234")
+        val repo = repository(mockk(relaxed = true), watched = listOf(WatchedItem("tt8888", "series", "Show", 1, 1, 1)))
+        val flags = kotlinx.coroutines.withTimeout(5_000) { repo.watchedItems.first() }
+        assertTrue(flags.any { it.contentId == "cinemana-series:7" })
+        assertFalse(flags.any { it.contentId in setOf("xt_v_src_42", "tt1234", "tmdb:movie:123") })
     }
 
     @Test fun `one Xtream playlist can project two independent TMDB works and survives restart`() {

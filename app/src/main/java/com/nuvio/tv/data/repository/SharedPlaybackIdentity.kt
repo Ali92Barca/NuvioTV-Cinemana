@@ -163,9 +163,14 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     }
     @Synchronized internal fun externalRelated(id: String): Set<String> {
         indexExternal()
+        val movieRelated = externalMovies.related(id)
+        // An untyped TMDB number can identify both a film and a series. Do not use
+        // that weak alias to bridge the two graphs when expanding watched history.
+        if (id.startsWith("tmdb:") && id.removePrefix("tmdb:").toIntOrNull() != null && movieRelated.size > 1 &&
+            (rowsByTitle[externalCanonical(id)].orEmpty().isNotEmpty() || entries.value.any { it.series && id in it.aliases })) return setOf(id)
         externalRelatedCache[id]?.let { return it }
         val touched = (rowsByTitle[id].orEmpty() + rowsByTitle[externalCanonical(id)].orEmpty()).map(::edge).toSet()
-        return (externalMovies.related(id) + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) })
+        return (movieRelated + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) })
             .also { externalRelatedCache[id] = it }
     }
 
@@ -303,7 +308,11 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
 
     internal fun related(id: String, seriesHint: Boolean? = null): Set<String> {
         val movieAliases = if (seriesHint == true) setOf(id) else externalMovies.related(id)
-        val direct = entries.value.filter { row -> row.aliases.any { it in movieAliases } && (seriesHint == null || row.series == seriesHint) }
+        val untypedTmdb = id.startsWith("tmdb:") && id.removePrefix("tmdb:").toIntOrNull() != null
+        val matchingAliases = if (untypedTmdb) movieAliases else movieAliases.filterNot {
+            it.startsWith("tmdb:") && it.removePrefix("tmdb:").toIntOrNull() != null
+        }.toSet()
+        val direct = entries.value.filter { row -> row.aliases.any { it in matchingAliases } && (seriesHint == null || row.series == seriesHint) }
         if (seriesHint == null && movieAliases.size > 1 && direct.any { it.series }) return setOf(id)
         // Numeric TMDB IDs can refer to unrelated movie and TV records.
         if (direct.map { it.series }.distinct().size > 1) return setOf(id)
