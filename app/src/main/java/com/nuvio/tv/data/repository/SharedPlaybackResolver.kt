@@ -61,7 +61,11 @@ class SharedPlaybackResolver @Inject constructor(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean = size > 256
     }
 
-    internal suspend fun learn(meta: Meta) {
+    internal suspend fun learn(meta: Meta) = withContext(Dispatchers.IO) {
+        learnIdentity(meta)
+    }
+
+    private suspend fun learnIdentity(meta: Meta) {
         if (!nativePlaybackId(meta.id)) return
         val tmdbId = (meta.artworkTmdbId ?: meta.tmdbId)?.toIntOrNull()?.takeIf { it > 0 } ?: return
         val kind = if (meta.apiType in setOf("series", "tv")) "tv" else "movie"

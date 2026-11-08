@@ -26,6 +26,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
@@ -69,26 +71,29 @@ class BuiltinCatalogPosters @Inject constructor(
     internal fun request(id: String, type: String) = resolver.prioritizePoster(id, type)
     internal fun verifySeries(id: String) = resolver.verifySeriesPoster(id)
 
-    internal fun observe(id: String, movie: Boolean, sourceBaseUrl: String? = null) = combine(
-        identities.entries, identities.artwork, arabic, watchedMovies,
-        combine(seriesWatchState, resolver.seriesPosterCandidates, identities.externalRevision) { series, candidates, _ -> series to candidates }
-    ) { entries, artwork, ar, watched, (series, candidates) ->
+    internal fun observe(id: String, movie: Boolean, sourceBaseUrl: String? = null): kotlinx.coroutines.flow.Flow<BuiltinPosterState> {
         if (id.startsWith("xt_")) {
-            return@combine BuiltinPosterState(identities.externalPosterImdb(id, sourceBaseUrl)?.let { betterPosterUrl(it, ar) })
+            // Keep native IPTV posters: no identity reads, history subscriptions or replacement loads.
+            return flowOf(BuiltinPosterState())
         }
-        val verified = entries.firstOrNull { it.native == id && it.series == !movie }
-        val imdb = artwork[id] ?: verified?.canonical
-        val completed = if (movie) watched?.contains(id) else verified
-            ?.takeUnless { it.partial }
-            ?.episodes?.keys?.filter { it.first != 0 }?.takeIf { it.isNotEmpty() }
-            ?.let { required -> series.episodes[id]?.containsAll(required) == true }
-        val tmdb = parseContentIds(candidates[id]).tmdb
-        val needsEpisodeVerification = !movie && verified == null && (
-            (imdb != null && (imdb in series.episodes || imdb in series.completed)) ||
-                (tmdb != null && tmdb in series.tmdbIds)
-        )
-        BuiltinPosterState(imdb?.let { betterPosterUrl(it, ar) }, completed, needsEpisodeVerification)
-    }.distinctUntilChanged()
+        return combine(
+            identities.entries, identities.artwork, arabic, watchedMovies,
+            combine(seriesWatchState, resolver.seriesPosterCandidates, identities.externalRevision) { series, candidates, _ -> series to candidates }
+        ) { entries, artwork, ar, watched, (series, candidates) ->
+            val verified = entries.firstOrNull { it.native == id && it.series == !movie }
+            val imdb = artwork[id] ?: verified?.canonical
+            val completed = if (movie) watched?.contains(id) else verified
+                ?.takeUnless { it.partial }
+                ?.episodes?.keys?.filter { it.first != 0 }?.takeIf { it.isNotEmpty() }
+                ?.let { required -> series.episodes[id]?.containsAll(required) == true }
+            val tmdb = parseContentIds(candidates[id]).tmdb
+            val needsEpisodeVerification = !movie && verified == null && (
+                (imdb != null && (imdb in series.episodes || imdb in series.completed)) ||
+                    (tmdb != null && tmdb in series.tmdbIds)
+            )
+            BuiltinPosterState(imdb?.let { betterPosterUrl(it, ar) }, completed, needsEpisodeVerification)
+        }.distinctUntilChanged().flowOn(Dispatchers.Default)
+    }
 }
 
 private data class SeriesWatchState(
@@ -106,6 +111,8 @@ internal val LocalBuiltinCatalogPosters = staticCompositionLocalOf<BuiltinCatalo
 
 @Composable
 internal fun rememberBuiltinPoster(item: MetaPreview): BuiltinPosterState {
+    // IPTV matching is retained for playback/progress only, not catalog artwork.
+    if (item.id.startsWith("xt_")) return BuiltinPosterState()
     val posters = LocalBuiltinCatalogPosters.current ?: return BuiltinPosterState()
     val external = item.id.startsWith("xt_")
     if (!external && !nativePlaybackId(item.id)) return BuiltinPosterState()

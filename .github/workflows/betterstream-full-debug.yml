@@ -53,7 +53,7 @@ jobs:
           PY
       - name: Test integrations and build full APK
         run: |
-          ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.tv.ui.components.BuiltinCatalogPosterTest' --tests 'com.nuvio.tv.ui.components.ProgressiveIptvPosterTest' --tests 'com.nuvio.tv.data.iptv.*' --tests 'com.nuvio.tv.data.repository.StreamRepositoryPluginIsolationTest' --tests 'com.nuvio.tv.data.repository.MetaRepositoryAddonCacheTest' --tests 'com.nuvio.tv.data.repository.SharedPlaybackIdentityTest' --tests 'com.nuvio.tv.data.repository.WatchProgressRepositoryProfileIsolationTest' --tests 'com.nuvio.tv.data.repository.TraktAuthServiceTest' :app:assembleFullDebug --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
+          ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.android.cinemana.CinemanaStreamConcurrencyTest' --tests 'com.nuvio.android.cinemana.CinemanaEditionResolutionTest' --tests 'com.nuvio.tv.ui.components.BuiltinCatalogPosterTest' --tests 'com.nuvio.tv.ui.components.ProgressiveIptvPosterTest' --tests 'com.nuvio.tv.data.iptv.*' --tests 'com.nuvio.tv.data.repository.StreamRepositoryPluginIsolationTest' --tests 'com.nuvio.tv.data.repository.MetaRepositoryAddonCacheTest' --tests 'com.nuvio.tv.data.repository.SharedPlaybackIdentityTest' --tests 'com.nuvio.tv.data.repository.WatchProgressRepositoryProfileIsolationTest' --tests 'com.nuvio.tv.data.repository.TraktAuthServiceTest' :app:assembleFullDebug --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
       - uses: actions/upload-artifact@v4
         with:
           name: BetterStream-full-debug-services

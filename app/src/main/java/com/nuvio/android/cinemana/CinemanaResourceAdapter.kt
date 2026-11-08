@@ -115,6 +115,11 @@ class CinemanaResourceAdapter(
                     JSONObject().put("subtitles", JSONArray(tracks))
                 } else {
                     val streams = coroutineScope { videos.map { video -> async {
+                        // Link retrieval does not depend on the descriptive info response.
+                        // Start both together, then retain all metadata when assembling streams.
+                        val streamsTask = async {
+                            optional { client.streams(video.videoId) }.orEmpty()
+                        }
                         val info = optional { client.info(video.videoId) }
                         val aliases = listOfNotNull(info?.optString("en_title"), info?.optString("ar_title"), video.title).filter { it.isNotBlank() }
                         val fallbackVersion = CinemanaEditions.label(aliases).takeIf { it != "نسخة Cinemana" } ?: video.version
@@ -127,9 +132,6 @@ class CinemanaResourceAdapter(
                             JSONObject().put("url", track.url).put("lang", track.language)
                                 .put("name", "${track.label} • $fallbackVersion")
                             } }.orEmpty()
-                        }
-                        val streamsTask = async {
-                            optional { client.streams(video.videoId) }.orEmpty()
                         }
                         val subtitles = subtitlesTask.await()
                         val audioLanguage = info?.optJSONObject("videoLanguages")

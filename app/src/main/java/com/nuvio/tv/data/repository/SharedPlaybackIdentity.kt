@@ -42,8 +42,12 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     private var rowsByNative = emptyMap<Triple<String, Int, Int>, List<ExternalEpisode>>()
     private var rowsByTitle = emptyMap<String, List<ExternalEpisode>>()
     private var partIds = emptySet<String>()
+    private val externalRelatedCache = object : LinkedHashMap<String, Set<String>>(64, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Set<String>>?) = size > 256
+    }
     private fun indexExternal() {
         if (indexedRevision == externalRevision.value) return
+        externalRelatedCache.clear()
         rowsByEdge = externalRows.groupBy(::edge)
         rowsByRef = externalRows.groupBy(::reference)
         rowsByNative = externalRows.groupBy { Triple(it.native, it.nativeSeason, it.nativeEpisode) }
@@ -136,8 +140,10 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     }
     @Synchronized internal fun externalRelated(id: String): Set<String> {
         indexExternal()
+        externalRelatedCache[id]?.let { return it }
         val touched = (rowsByTitle[id].orEmpty() + rowsByTitle[externalCanonical(id)].orEmpty()).map(::edge).toSet()
-        return setOf(id) + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) }
+        return (setOf(id) + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) })
+            .also { externalRelatedCache[id] = it }
     }
 
     /** Artwork reuses verified primary work identities; numbered-part aliases cannot replace it. */

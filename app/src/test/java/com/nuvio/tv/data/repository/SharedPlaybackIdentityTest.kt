@@ -250,7 +250,7 @@ class SharedPlaybackIdentityTest {
         assertFalse(verifiedEpisodeCoordinates(listOf(1 to 1, 1 to 1), official))
         assertFalse(verifiedEpisodeCoordinates(emptyList(), official))
     }
-    private fun repository(delegate: WatchProgressRepositoryImpl): SharedWatchProgressRepository {
+    private fun repository(delegate: WatchProgressRepositoryImpl, identities: SharedPlaybackIdentity = registry): SharedWatchProgressRepository {
         every { delegate.allProgress } returns flowOf(emptyList())
         every { delegate.continueWatching } returns flowOf(emptyList())
         every { delegate.watchedItems } returns flowOf(emptyList())
@@ -260,7 +260,36 @@ class SharedPlaybackIdentityTest {
             coEvery { resolve(any()) } coAnswers { registry.canonical(firstArg()) }
         }
         val profiles = mockk<ProfileManager> { every { activeProfileId } returns MutableStateFlow(1) }
-        return SharedWatchProgressRepository(delegate, registry, resolver, profiles)
+        return SharedWatchProgressRepository(delegate, identities, resolver, profiles)
+    }
+    @Test fun `large watched history projects off collector thread and resolves each title only once`() = kotlinx.coroutines.runBlocking {
+        val collector = Thread.currentThread()
+        val native = "xt_s_src_42"
+        registry.learnExternalSeason("https://example.test", native, "tt1234", 1, 1,
+            (1..100).map { Triple(it, "$native:1:$it", it) })
+        val tracked = spyk(registry)
+        every { tracked.externalRelated(any()) } answers {
+            assertNotSame(collector, Thread.currentThread())
+            callOriginal()
+        }
+        val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
+        val repo = repository(backend, tracked)
+        every { backend.watchedItems } returns flowOf((1..100).map { WatchedItem("tt1234", "series", "Show", 1, it, 1L) })
+        val result = kotlinx.coroutines.withTimeout(10_000) { repo.watchedItems.first() }
+        assertEquals(200, result.size)
+        assertTrue(result.any { it.contentId == native && it.episode == 100 })
+        verify(exactly = 1) { tracked.externalRelated("tt1234") }
+    }
+
+    @Test fun `cached title relationships refresh after a new part and revoked season`() {
+        val base = "https://example.test"
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode(base, native, "$native:1:1", 1, 1, "tt1234", 1, 1)
+        assertEquals(setOf(native, "tt1234"), registry.externalRelated(native))
+        registry.learnExternalEpisode(base, native, "$native:2:1", 2, 1, "tt5678", 1, 1)
+        assertTrue("tt5678" in registry.externalRelated(native))
+        registry.invalidateExternalSeason(base, native, 2, "tt5678")
+        assertEquals(setOf(native, "tt1234"), registry.externalRelated(native))
     }
     @Test fun `mark watched dispatches once to canonical backend not once per alias`() = runTest {
         registry.learn(meta("cinemana:7"), "tt1234")

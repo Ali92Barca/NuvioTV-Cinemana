@@ -4,6 +4,8 @@ import com.nuvio.tv.core.profile.ProfileManager
 import com.nuvio.tv.domain.model.*
 import com.nuvio.tv.domain.repository.WatchProgressRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.*
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -22,24 +24,28 @@ class SharedWatchProgressRepository @Inject constructor(
         resolver.resolve(id)
         emitAll(identityChanges.flatMapLatest { block(identities.related(id).flatMap { identities.externalRelated(it) }
             .flatMap { identities.related(it) }.toSet()) })
-    }
-    private fun list(source: Flow<List<WatchProgress>>) = combine(source, identityChanges) { items, _ -> identities.project(items) }
+    }.flowOn(Dispatchers.Default)
+    private fun list(source: Flow<List<WatchProgress>>) = combine(source, identityChanges) { items, _ -> identities.project(items) }.flowOn(Dispatchers.Default)
     private fun latest(items: List<WatchProgress>) = identities.project(items).groupBy { it.contentId }
         .values.mapNotNull { group -> group.maxWithOrNull(compareBy<WatchProgress> { it.lastWatched }.thenBy { it.season ?: 0 }.thenBy { it.episode ?: 0 }) }
         .sortedByDescending { it.lastWatched }
-    override val allProgress = combine(delegate.allProgress, identityChanges) { items, _ -> latest(items) }
+    override val allProgress = combine(delegate.allProgress, identityChanges) { items, _ -> latest(items) }.flowOn(Dispatchers.Default)
     override val continueWatching = combine(delegate.continueWatching, allProgress, identityChanges) { items, all, _ ->
         val newest = all.associateBy { it.contentId }
         latest(items).filter { candidate -> (newest[candidate.contentId]?.lastWatched ?: 0L) <= candidate.lastWatched }
-    }
+    }.flowOn(Dispatchers.Default)
     override val watchedItems = combine(delegate.watchedItems, identityChanges) { items, _ ->
+        // Resolve title aliases once per work, rather than once per watched episode.
+        val targets = mutableMapOf<Pair<String, Boolean>, Set<String>>()
         items.flatMap { item ->
             val series = item.season != null || item.contentType in setOf("series", "tv", "anime")
-            identities.related(item.contentId, seriesHint = true.takeIf { series }).flatMap { identities.externalRelated(it) }
+            targets.getOrPut(item.contentId to series) {
+                identities.related(item.contentId, seriesHint = true.takeIf { series }).flatMap { identities.externalRelated(it) }
                 .flatMap { identities.related(it, seriesHint = true.takeIf { series }) }.toSet()
+            }
                 .mapNotNull { target -> identities.watched(item, target).takeIf { it.contentId == target } }
         }
-    }
+    }.flowOn(Dispatchers.Default)
     override fun getProgress(contentId: String) = profiles.activeProfileId.flatMapLatest { getProgress(contentId, it) }
     override fun getProgress(contentId: String, profileId: Int): Flow<WatchProgress?> = observe(contentId) { ids ->
         val legacy = if (ids.size > 1) ids.filter(::nativePlaybackId).map { delegate.localIdentityProgress(it, null, null, profileId) } else emptyList()
@@ -79,7 +85,7 @@ class SharedWatchProgressRepository @Inject constructor(
     override fun observeWatchedMovieIds() = combine(delegate.observeWatchedMovieIds(), allProgress, identityChanges) { ids, progress, _ ->
         val replaying = progress.filter { it.season == null && !it.isCompleted() && (it.position > 0 || (it.progressPercent ?: 0f) > 0) }.map { it.contentId }.toSet()
         identities.expand(ids).filterNot { identities.canonical(it) in replaying }.toSet()
-    }
+    }.flowOn(Dispatchers.Default)
     override fun isWatched(contentId: String, videoId: String?, season: Int?, episode: Int?): Flow<Boolean> = observe(contentId) { ids ->
         val allowed = ids.filter { identities.canProjectEpisode(contentId, it, season, episode) }
         val watched = combine(allowed.mapNotNull { target ->
@@ -95,7 +101,7 @@ class SharedWatchProgressRepository @Inject constructor(
     }
     private suspend fun canonical(progress: WatchProgress): WatchProgress {
         kotlinx.coroutines.withTimeoutOrNull(1_500) { resolver.resolve(progress.contentId) }
-        return identities.progress(progress)
+        return withContext(Dispatchers.Default) { identities.progress(progress) }
     }
     override suspend fun saveProgress(progress: WatchProgress, syncRemote: Boolean) = saveProgress(progress, profiles.activeProfileId.value, syncRemote)
     override suspend fun saveProgress(progress: WatchProgress, profileId: Int, syncRemote: Boolean) = delegate.saveProgress(canonical(progress), profileId, syncRemote)
@@ -176,7 +182,7 @@ class SharedWatchProgressRepository @Inject constructor(
         return result
     }
     override fun getAiredEpisodeOrder(contentId: String) = observe(contentId) { delegate.getAiredEpisodeOrder(identities.canonical(contentId)) }
-    override fun observeNextUpSeeds() = combine(delegate.observeNextUpSeeds(), identityChanges) { items, _ -> latest(items) }
+    override fun observeNextUpSeeds() = combine(delegate.observeNextUpSeeds(), identityChanges) { items, _ -> latest(items) }.flowOn(Dispatchers.Default)
     override fun isDroppedShow(contentId: String) = delegate.isDroppedShow(identities.canonical(contentId))
     override suspend fun normalizeParentContentId(parentContentId: String, videoId: String?): String =
         normalizeParentContentId(parentContentId, videoId, profiles.activeProfileId.value)
@@ -187,5 +193,5 @@ class SharedWatchProgressRepository @Inject constructor(
         return delegate.normalizeParentContentId(resolved, if (resolved == parentContentId) videoId else null, profileId)
     }
     override suspend fun prepareNextUpSeed(progress: WatchProgress) = delegate.prepareNextUpSeed(canonical(progress))
-    override fun observeOptimisticContinueWatchingUpdates() = delegate.observeOptimisticContinueWatchingUpdates().map { identities.progress(it) }
+    override fun observeOptimisticContinueWatchingUpdates() = delegate.observeOptimisticContinueWatchingUpdates().map { identities.progress(it) }.flowOn(Dispatchers.Default)
 }
