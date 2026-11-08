@@ -22,6 +22,14 @@ internal data class PlaybackIdentity(val native: String, val canonical: String, 
 class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Context) {
     private val prefs = context.getSharedPreferences("shared_playback_identity_v1", Context.MODE_PRIVATE)
     internal val entries = MutableStateFlow(read())
+    /** Reuse a provider's verified layout when TMDB already lists a newer episode. */
+    internal fun verifiedSeriesSeason(tmdbId: String, season: Int): Set<Int>? = verifiedSeriesSeasonForCount(tmdbId, season, null)
+    internal fun verifiedSeriesSeasonForCount(tmdbId: String, season: Int, count: Int?): Set<Int>? {
+        val id = "tmdb:tv:$tmdbId"
+        return entries.value.filter { it.series && !it.partial && id in it.aliases }
+            .map { row -> row.episodes.keys.filter { it.first == season }.map { it.second }.toSet() }
+            .filter { it.isNotEmpty() && (count == null || it.size == count) }.distinct().singleOrNull()
+    }
     internal data class ExternalEpisode(val scope: String, val native: String, val nativeVideo: String,
         val nativeSeason: Int, val nativeEpisode: Int, val canonical: String,
         val canonicalSeason: Int, val canonicalEpisode: Int, val alias: Boolean = false,

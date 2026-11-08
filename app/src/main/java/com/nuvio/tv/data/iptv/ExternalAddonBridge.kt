@@ -49,6 +49,15 @@ class ExternalAddonBridge @Inject constructor(
         val number = Regex("tmdb:movie:([1-9][0-9]*)").matchEntire(id)?.groupValues?.get(1) ?: return id
         return "tmdb:$number"
     }
+    internal fun verifiedSiblingMap(tmdbId: String?, canonical: Map<Int, Set<Int>>, native: Map<Int, List<Int>>,
+        season: Int, nativeSeason: Int, turkish: Boolean): Map<Int, Int>? {
+        if (!turkish || tmdbId == null || season != nativeSeason) return null
+        val verified = identities?.verifiedSeriesSeasonForCount(tmdbId, season, native[nativeSeason]?.size)
+            ?.takeIf { it.isNotEmpty() } ?: return null
+        if (native[nativeSeason]?.size != verified.size) return null
+        return ExternalEpisodeNumbering.episodeMap(canonical + (season to verified), native,
+            season, nativeSeason, verified, false, true)
+    }
     fun supports(addon: Addon, type: String) = addon.resources.any {
         it.name == "stream" && (it.types.isEmpty() || type in it.types)
     } && catalogs(addon, type).isNotEmpty()
@@ -124,6 +133,10 @@ class ExternalAddonBridge @Inject constructor(
                     native.videos.orEmpty().filter { it.season != null }.groupBy { it.season!! }
                         .mapValues { (_, videos) -> videos.mapNotNull { it.episode } },
                     season, nativeSeason, airedNumbers, info.arabic, info.turkish)
+                    ?: if (!partParent) verifiedSiblingMap(info.tmdbId,
+                        canonical.videos.filter { it.season != null }.groupBy { it.season!! }.mapValues { (_, vs) -> vs.mapNotNull { it.episode }.toSet() },
+                        native.videos.orEmpty().filter { it.season != null }.groupBy { it.season!! }.mapValues { (_, vs) -> vs.mapNotNull { it.episode } },
+                        season, nativeSeason, info.turkish) else null
                 if (BuildConfig.DEBUG) android.util.Log.d("ExternalAddonBridge",
                     "Episode mapping turkish=${info.turkish} season=$season episode=$episode canonicalCount=${completeSeason.size} nativeCount=${nativeSeasonVideos.size} mapped=${mapping?.size ?: 0}")
                 val episodeMap = mapping ?: run {
@@ -270,7 +283,8 @@ class ExternalAddonBridge @Inject constructor(
                 val imdb = api.getTvExternalIds(match.tmdbId, BuildConfig.TMDB_API_KEY).body()?.imdbId
                     ?.takeIf { Regex("tt[0-9]+").matches(it) }
                 if (conflicts(native.imdbId, imdb) || conflicts(native.tmdbId, match.tmdbId.toString())) return@withTimeoutOrNull native
-                val numberedPart = labels.any { splitPart(it) != null }
+                val numberedPart = labels.any { splitPart(it) != null } &&
+                    !canUseSeriesImdb(match.tmdbId.toString(), imdb, labels.toSet())
                 val canonical = if (numberedPart) "tmdb:tv:${match.tmdbId}" else imdb ?: "tmdb:tv:${match.tmdbId}"
                 if (!numberedPart) identities.learnExternalCanonical(match.tmdbId.toString(), imdb)
                 val verified = mutableSetOf<String>()
@@ -285,16 +299,19 @@ class ExternalAddonBridge @Inject constructor(
                     val airedNumbers = aired.mapNotNull { it.episodeNumber }.toSet()
                     val episodeMap = ExternalEpisodeNumbering.episodeMap(canonicalSeasons,
                         sourceSeasons.mapValues { (_, items) -> items.mapNotNull { it.episode } },
-                        season, season, airedNumbers, arabic, turkish) ?: run {
+                        season, season, airedNumbers, arabic, turkish)
+                        ?: if (!numberedPart) verifiedSiblingMap(match.tmdbId.toString(), canonicalSeasons,
+                            sourceSeasons.mapValues { (_, items) -> items.mapNotNull { it.episode } }, season, season, turkish) else null
+                    val acceptedMap = episodeMap ?: run {
                             if (turkish) identities.invalidateExternalSeason(addon.baseUrl, native.id, season, canonical)
                             null
                         } ?: continue
-                    val expected = complete.filter { it.episodeNumber in episodeMap }
+                    val expected = complete.filter { it.episodeNumber in acceptedMap }
                     val expectedNumbers = expected.mapNotNull { it.episodeNumber }.toSet()
                     val verifiedSeason = mutableListOf<Triple<Int, String, Int>>()
                     for (item in expected) {
                         val number = item.episodeNumber ?: continue
-                        val nativeNumber = episodeMap[number] ?: continue
+                        val nativeNumber = acceptedMap[number] ?: continue
                         val video = videos.singleOrNull { it.episode == nativeNumber } ?: continue
                         val canonicalVideo = video.copy(title = item.name.orEmpty(), released = item.airDate)
                         val sourceVideo = VideoDto(video.id, title = video.title, released = video.released, season = season, episode = number)
@@ -351,7 +368,7 @@ class ExternalAddonBridge @Inject constructor(
                 aliases.orEmpty().mapNotNull { it.title }.filter(String::isNotBlank).forEach(titles::add)
             }
         } catch (e: CancellationException) { throw e } catch (_: Exception) { /* optional aliases */ }
-        if (type == "series" && id != null && titles.none { splitPart(it) != null }) identities?.learnExternalCanonical(id, imdb)
+        if (type == "series" && id != null && canUseSeriesImdb(id, imdb, titles)) identities?.learnExternalCanonical(id, imdb)
         return Info(titles, id, imdb, arabic, turkish).also { result ->
             if (detailsLoaded) synchronized(infoCache) { infoCache[cacheKey] = InfoEntry(System.nanoTime(), result) }
         }
@@ -359,6 +376,18 @@ class ExternalAddonBridge @Inject constructor(
     internal fun splitPart(title: String): Pair<String, Int>? {
         val match = Regex("^(.+?)\\s+([2-9]|[1-9][0-9])$").matchEntire(title.trim()) ?: return null
         return match.groupValues[1] to match.groupValues[2].toInt()
+    }
+    /** A numeric title (e.g. an age) is not automatically a numbered sequel. */
+    internal suspend fun canUseSeriesImdb(id: String, imdb: String?, titles: Set<String>): Boolean {
+        if (imdb == null) return false
+        if (titles.none { splitPart(it) != null }) return true
+        if (tmdb == null || BuildConfig.TMDB_API_KEY.isBlank()) return false
+        return try {
+            withTimeoutOrNull(2_000) {
+                tmdb.findByExternalId(imdb, BuildConfig.TMDB_API_KEY).body()?.tvResults
+                    ?.filter { it.id > 0 }?.distinctBy { it.id }?.singleOrNull()?.id?.toString() == id
+            } == true
+        } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { false }
     }
     private fun conflicts(expected: String?, actual: String?) = !expected.isNullOrBlank() && !actual.isNullOrBlank() && !expected.equals(actual, true)
     private fun year(value: String?) = value?.let { Regex("(?:19|20)[0-9]{2}").find(it)?.value?.toIntOrNull() }

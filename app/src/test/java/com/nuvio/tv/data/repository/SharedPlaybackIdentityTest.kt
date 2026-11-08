@@ -11,6 +11,48 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SharedPlaybackIdentityTest {
+    @Test fun `Daha 17 native metadata links all 23 verified episodes and collapses duplicate progress`() = verifyNativeSibling(317883, "tt42764103", "Daha 17", 23, 25, 24)
+    @Test fun `Omur native metadata links six episodes despite seventh TMDB episode`() = verifyNativeSibling(322280, "tt39333720", "Ömür Usta", 6, 7, 7)
+    private fun verifyNativeSibling(tmdbId: Int, imdb: String, title: String, count: Int, total: Int, aired: Int) = kotlinx.coroutines.runBlocking {
+        org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
+        val original = meta("cinemana-series:7", tmdbId.toString(), true, true)
+        val videos = (1..count).map { original.videos.first().copy(id = "cinemana:${100+it}", episode = it) }
+        registry.learn(original.copy(videos = videos), imdb)
+        val nativeId = "xt_s_src_42"
+        val native = original.copy(id = nativeId, name = title, videos = videos.map { it.copy(id = "$nativeId:1:${it.episode}") })
+        val api = mockk<com.nuvio.tv.data.remote.api.TmdbApi>()
+        coEvery { api.getTvDetails(tmdbId, any(), any()) } returns retrofit2.Response.success(com.nuvio.tv.data.remote.api.TmdbDetailsResponse(tmdbId, name = title, originalName = title, originalLanguage = "tr"))
+        coEvery { api.getTvExternalIds(tmdbId, any()) } returns retrofit2.Response.success(com.nuvio.tv.data.remote.api.TmdbExternalIdsResponse(tmdbId, imdb))
+        coEvery { api.findByExternalId(imdb, any(), any()) } returns retrofit2.Response.success(com.nuvio.tv.data.remote.api.TmdbFindResponse(tvResults = listOf(com.nuvio.tv.data.remote.api.TmdbFindResult(tmdbId))))
+        coEvery { api.getTvSeasonDetails(tmdbId, 1, any(), any()) } returns retrofit2.Response.success(com.nuvio.tv.data.remote.api.TmdbSeasonResponse(1,
+            (1..total).map { com.nuvio.tv.data.remote.api.TmdbEpisode(episodeNumber = it, name = "Episode $it", airDate = if (it <= aired) "2000-01-01" else "2099-01-01") }))
+        val addon = Addon(id = "org.betterstream.test", name = "IPTV", version = "14", description = null, logo = null,
+            baseUrl = "https://example.test", types = listOf(ContentType.SERIES),
+            resources = listOf(AddonResource("stream",listOf("series"),listOf("xt_"))), catalogs = emptyList())
+        val bridge = com.nuvio.tv.data.iptv.ExternalAddonBridge(mockk(), api, registry)
+        val enriched = bridge.enrichNative(addon, native)
+        assertTrue(enriched.sharedProgressCompatible)
+        assertEquals(count, enriched.verifiedPlaybackVideoIds?.size)
+        assertEquals(nativeId, enriched.id)
+        val public = progress(imdb,20,true).copy(episode = 2, videoId = "$imdb:1:2")
+        val source = progress(nativeId,10,true).copy(episode = 2, videoId = "$nativeId:1:2")
+        assertEquals(imdb, registry.progress(source).contentId)
+        assertEquals("$nativeId:1:2", registry.progress(public,nativeId).videoId)
+        assertEquals(1, registry.project(listOf(source,public)).size)
+        assertEquals(20L, registry.project(listOf(source,public)).single().lastWatched)
+    }
+    @Test fun `verified sibling seasons require one consistent provider layout`() {
+        registry.learn(meta("cinemana-series:7", series = true, safe = true), "tt1234")
+        assertEquals(setOf(1), registry.verifiedSeriesSeason("123", 1))
+        assertNull(registry.verifiedSeriesSeason("999", 1))
+        registry.learn(meta("cee:9", series = true, safe = true).copy(videos = emptyList()), "tt1234")
+        assertEquals(setOf(1), registry.verifiedSeriesSeason("123", 1))
+        val peer = meta("cee:9", series = true, safe = true)
+        registry.learn(peer.copy(videos = peer.videos + peer.videos.first().copy(id = "cee:9:1:2", episode = 2)), "tt1234")
+        assertNull(registry.verifiedSeriesSeason("123", 1))
+        assertEquals(setOf(1), registry.verifiedSeriesSeasonForCount("123", 1, 1))
+        assertEquals(setOf(1,2), registry.verifiedSeriesSeasonForCount("123", 1, 2))
+    }
     private val values = mutableMapOf<String, String>()
     private val editor = mockk<SharedPreferences.Editor>(relaxed = true) {
         every { putString(any(), any()) } answers { values[firstArg()] = secondArg(); this@mockk }

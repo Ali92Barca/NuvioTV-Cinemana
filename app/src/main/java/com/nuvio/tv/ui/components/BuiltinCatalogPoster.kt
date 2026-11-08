@@ -85,7 +85,7 @@ class BuiltinCatalogPosters @Inject constructor(
             val completed = if (movie) watched?.contains(id) else verified
                 ?.takeUnless { it.partial }
                 ?.episodes?.keys?.filter { it.first != 0 }?.takeIf { it.isNotEmpty() }
-                ?.let { required -> series.episodes[id]?.containsAll(required) == true }
+                ?.let { verified?.aliases?.any { it in series.completed } }
             val tmdb = parseContentIds(candidates[id]).tmdb
             val needsEpisodeVerification = !movie && verified == null && (
                 (imdb != null && (imdb in series.episodes || imdb in series.completed)) ||

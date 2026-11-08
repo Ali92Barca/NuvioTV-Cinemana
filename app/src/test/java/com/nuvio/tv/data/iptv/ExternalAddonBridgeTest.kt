@@ -15,6 +15,29 @@ import org.junit.Test
 import retrofit2.Response
 
 class ExternalAddonBridgeTest {
+    @Test fun numericPrimaryTitleUsesOfficialImdbProofWithoutJoiningASeparateNumberedPart() = runBlocking {
+        org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
+        val tmdb = mockk<TmdbApi>()
+        coEvery { tmdb.findByExternalId(any(), any(), any()) } returns Response.success(
+            com.nuvio.tv.data.remote.api.TmdbFindResponse(tvResults = listOf(com.nuvio.tv.data.remote.api.TmdbFindResult(317883))))
+        val bridge = ExternalAddonBridge(api, tmdb)
+        assertTrue(bridge.canUseSeriesImdb("317883", "tt42764103", setOf("Daha 17")))
+        assertFalse(bridge.canUseSeriesImdb("338743", "tt42764103", setOf("ليل البنفسج 2")))
+    }
+    @Test fun verifiedSiblingLayoutSupportsMatchingAvailableTurkishEditionsBehindTmdbSchedule() {
+        val identities = mockk<SharedPlaybackIdentity>()
+        every { identities.verifiedSeriesSeasonForCount("42", 1, any()) } returns (1..6).toSet()
+        val bridge = ExternalAddonBridge(api, identities = identities)
+        val expected = mapOf(1 to (1..7).toSet())
+        assertEquals((1..6).associateWith { it }, bridge.verifiedSiblingMap("42", expected, mapOf(1 to (1..6).toList()), 1, 1, true))
+        assertNull(bridge.verifiedSiblingMap("42", expected, mapOf(1 to listOf(1,2,3,4,5,5)), 1, 1, true))
+        assertNull(bridge.verifiedSiblingMap("42", expected, mapOf(1 to (1..5).toList()), 1, 1, true))
+        assertNull(bridge.verifiedSiblingMap("42", expected, mapOf(1 to (1..6).toList()), 1, 1, false))
+        assertNull(bridge.verifiedSiblingMap("42", expected, mapOf(2 to (1..6).toList()), 1, 2, true))
+        every { identities.verifiedSeriesSeasonForCount("42", 2, any()) } returns (1..6).toSet()
+        assertNull(bridge.verifiedSiblingMap("42", mapOf(1 to (1..10).toSet(),2 to (1..7).toSet()),
+            mapOf(1 to (1..20).toList(),2 to (1..6).toList()), 2, 2, true))
+    }
     @Test fun betterStreamMovieRequestsUseTheSupportedUntypedTmdbRouteOnly() {
         val source = addon().copy(id = "org.betterstream.example", resources = listOf(AddonResource("stream", listOf("movie", "series"), listOf("xt_", "tmdb:"))))
         assertEquals("tmdb:315635", bridge.streamRequestId(source, "movie", "tmdb:movie:315635"))
