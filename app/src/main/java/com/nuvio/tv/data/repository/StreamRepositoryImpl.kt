@@ -238,9 +238,27 @@ class StreamRepositoryImpl @Inject constructor(
                                 if (fresh.isNotEmpty()) resultChannel.send(AddonStreams(addon.displayName, addon.logo, fresh))
                             } finally { emissionMutex.unlock() }
                         }
+                        val scheduledIds = mutableSetOf<String>()
+                        fun enqueueNative(nativeId: String) {
+                            if (!addon.supportsStreamResource(type, nativeId) || !scheduledIds.add(nativeId)) return
+                            nativeRequests += addonScope.async {
+                                try {
+                                    val streams = (getStreamsFromAddon(addon, type, nativeId)
+                                        as? NetworkResult.Success<List<Stream>>)?.data.orEmpty()
+                                    publishAvailable(streams)
+                                    streams
+                                } catch (cancelled: CancellationException) { throw cancelled }
+                                catch (_: Exception) { emptyList() }
+                            }
+                        }
                         try {
                             val requestedId = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(addon.id, type, videoId, parentMetaId, season, episode)
                             val searchNative = externalAddonBridge.isXtream(addon) && !requestedId.startsWith("xt_")
+                            if (searchNative && type == "movie") {
+                                // Publish previously verified native links while the addon's public-ID
+                                // request runs. Keep that request to retain additional editions/qualities.
+                                externalAddonBridge.cachedMovieIds(addon, requestedId).forEach(::enqueueNative)
+                            }
                             val directResult = if (!(searchNative && type == "series") && addon.supportsStreamResource(type, requestedId)) {
                                 getStreamsFromAddon(addon, type, requestedId)
                             } else NetworkResult.Success(emptyList<Stream>())
@@ -261,19 +279,6 @@ class StreamRepositoryImpl @Inject constructor(
                                 if (canonical == null) {
                                     if (searchNative && type == "series") NetworkResult.Success(emptyList()) else directResult
                                 } else {
-                                    val scheduledIds = mutableSetOf<String>()
-                                    fun enqueueNative(nativeId: String) {
-                                        if (!addon.supportsStreamResource(type, nativeId) || !scheduledIds.add(nativeId)) return
-                                        nativeRequests += addonScope.async {
-                                            try {
-                                                val streams = (getStreamsFromAddon(addon, type, nativeId)
-                                                    as? NetworkResult.Success<List<Stream>>)?.data.orEmpty()
-                                                publishAvailable(streams)
-                                                streams
-                                            } catch (cancelled: CancellationException) { throw cancelled }
-                                            catch (_: Exception) { emptyList() }
-                                        }
-                                    }
                                     val nativeIds = externalAddonBridge.resolveAll(addon, type, canonical, season, episode) { enqueueNative(it) }
                                     nativeIds.forEach(::enqueueNative)
                                     val verified = nativeRequests.flatMap { it.await() }

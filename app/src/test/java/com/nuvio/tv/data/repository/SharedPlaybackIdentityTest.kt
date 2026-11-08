@@ -49,6 +49,57 @@ class SharedPlaybackIdentityTest {
         assertEquals("cinemana:7", movie.id)
     }
 
+    @Test fun `Xtream movie progress and watched flags join Nuvio Cinemana and Cee in both directions`() {
+        val native = "xt_v_src_42"
+        registry.learn(meta("cinemana:7"), "tt1234")
+        registry.learn(meta("cee:9"), "tt1234")
+        registry.learnExternalMovie("https://example.test/a", native, "123", "tt1234")
+        val playback = progress(native).copy(addonBaseUrl = "https://example.test/a")
+        assertEquals("tt1234", registry.progress(playback).contentId)
+        assertEquals(native, registry.progress(progress("tt1234"), native).videoId)
+        assertEquals("cinemana:7", registry.progress(playback, "cinemana:7").contentId)
+        assertEquals(native, registry.progress(progress("cee:9"), native).contentId)
+        assertEquals(native, registry.watched(WatchedItem("tt1234", "movie", "Movie", null, null, 1), native).contentId)
+        assertTrue(registry.externalRelated("tt1234").contains(native))
+        assertTrue(registry.related("tt1234", false).contains(native))
+        assertTrue(registry.related("cinemana:7", false).contains(native))
+        assertEquals(listOf(native), registry.externalMovieSources("https://example.test/a", "123", "tt1234"))
+        assertTrue(registry.externalMovieSources("https://example.test/other", "123", "tt1234").isEmpty())
+        assertEquals("tt1234", SharedPlaybackIdentity(context).canonical(native, false))
+        assertEquals(native, playback.contentId)
+    }
+
+    @Test fun `colliding movie IDs in subscriptions never mix different films`() {
+        val native = "xt_v_src_42"
+        registry.learnExternalMovie("https://example.test/a", native, "123", "tt1234")
+        registry.learnExternalMovie("https://example.test/b", native, "456", "tt5678")
+        assertEquals(native, registry.canonical(native, false))
+        assertEquals(native, registry.progress(progress(native)).contentId)
+        assertEquals("tt1234", registry.progress(progress(native).copy(addonBaseUrl = "https://example.test/a")).contentId)
+        assertEquals("tt5678", registry.progress(progress(native).copy(addonBaseUrl = "https://example.test/b")).contentId)
+        assertFalse(native in registry.related("tt1234", false))
+        assertEquals("tt1234", registry.progress(progress("tt1234"), native).contentId)
+        assertFalse(values.getValue("external_movies_v1").contains("https://"))
+    }
+
+    @Test fun `movie identity upgrades to IMDb and rejects a conflicting rematch`() {
+        val native = "xt_v_src_42"
+        registry.learnExternalMovie("https://example.test", native, "123", null)
+        assertEquals("tmdb:movie:123", registry.canonical(native, false))
+        registry.learnExternalMovie("https://example.test", native, "123", "tt1234")
+        registry.learnExternalMovie("https://example.test", native, "456", "tt5678")
+        assertEquals("tt1234", registry.canonical(native, false))
+        assertEquals("tt1234", registry.progress(progress("tmdb:movie:123")).contentId)
+    }
+
+    @Test fun `numeric TMDB movie identity does not join a TV work of the same number`() {
+        registry.learn(meta("cinemana-series:7", series = true, safe = true), "tt8888")
+        registry.learnExternalMovie("https://example.test", "xt_v_src_42", "123", "tt1234")
+        assertEquals(setOf("tmdb:123"), registry.related("tmdb:123"))
+        assertFalse("xt_v_src_42" in registry.related("tmdb:123", true))
+        assertTrue("xt_v_src_42" in registry.related("tmdb:movie:123", false))
+    }
+
     @Test fun `one Xtream playlist can project two independent TMDB works and survives restart`() {
         val native = "xt_s_src_42"
         registry.learnExternalEpisode("https://example.test/private-one", native, "$native:1:1", 1, 1, "tt101", 1, 1)

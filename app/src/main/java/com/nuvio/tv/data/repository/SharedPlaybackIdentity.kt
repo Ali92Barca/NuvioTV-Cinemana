@@ -31,6 +31,29 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
             object : TypeToken<List<ExternalEpisode>>() {}.type).orEmpty()
     }.getOrDefault(emptyList()).toMutableList()
     internal val externalRevision = MutableStateFlow(0L)
+    @Volatile private var externalMovies = ExternalMovieIdentities(runCatching {
+        Gson().fromJson<List<ExternalMovieIdentity>>(prefs.getString("external_movies_v1", "[]"),
+            object : TypeToken<List<ExternalMovieIdentity>>() {}.type).orEmpty()
+    }.getOrDefault(emptyList()))
+
+    @Synchronized internal fun learnExternalMovie(baseUrl: String, native: String, tmdb: String?, imdb: String?) {
+        if (baseUrl.isBlank() || !externalMovieId(native)) return
+        val tmdbId = tmdb?.takeIf { it.toIntOrNull()?.let { n -> n > 0 } == true }
+        val imdbId = imdb?.takeIf { Regex("tt[0-9]+").matches(it) }
+        if (tmdbId == null && imdbId == null) return
+        val scope = sourceScope(baseUrl)
+        val old = externalMovies.rows.firstOrNull { it.scope == scope && it.native == native }
+        if (old != null && ((old.tmdb != null && tmdbId != null && old.tmdb != tmdbId) ||
+            (old.imdb != null && imdbId != null && old.imdb != imdbId))) return
+        val row = ExternalMovieIdentity(scope, native, tmdbId ?: old?.tmdb, imdbId ?: old?.imdb)
+        if (row == old) return
+        val next = externalMovies.rows.filterNot { it.scope == scope && it.native == native } + row
+        check(prefs.edit().putString("external_movies_v1", Gson().toJson(next)).commit())
+        externalMovies = ExternalMovieIdentities(next)
+        externalRevision.value += 1
+    }
+    internal fun externalMovieSources(baseUrl: String, tmdb: String?, imdb: String?) =
+        externalMovies.nativeIds(sourceScope(baseUrl), tmdb, imdb)
     private val externalCanonicalLinks = runCatching {
         Gson().fromJson<Map<String, String>>(prefs.getString("external_canonical_links_v1", "{}"),
             object : TypeToken<Map<String, String>>() {}.type).orEmpty()
@@ -142,7 +165,7 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         indexExternal()
         externalRelatedCache[id]?.let { return it }
         val touched = (rowsByTitle[id].orEmpty() + rowsByTitle[externalCanonical(id)].orEmpty()).map(::edge).toSet()
-        return (setOf(id) + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) })
+        return (externalMovies.related(id) + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) })
             .also { externalRelatedCache[id] = it }
     }
 
@@ -191,6 +214,10 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         return groups.size > 1
     }
     @Synchronized private fun externalProgress(value: WatchProgress, target: String? = null): WatchProgress {
+        if (value.contentType == "movie" && value.season == null && value.episode == null) {
+            val publicTarget = target?.takeIf(::nativePlaybackId)?.let { canonical(it, false) } ?: target
+            return externalMovies.project(value, publicTarget, value.addonBaseUrl?.let(::sourceScope))
+        }
         indexExternal()
         val season = value.season ?: return value
         val episode = value.episode ?: return value
@@ -275,14 +302,18 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     }
 
     internal fun related(id: String, seriesHint: Boolean? = null): Set<String> {
-        val direct = entries.value.filter { id in it.aliases && (seriesHint == null || it.series == seriesHint) }
+        val movieAliases = if (seriesHint == true) setOf(id) else externalMovies.related(id)
+        val direct = entries.value.filter { row -> row.aliases.any { it in movieAliases } && (seriesHint == null || row.series == seriesHint) }
+        if (seriesHint == null && movieAliases.size > 1 && direct.any { it.series }) return setOf(id)
         // Numeric TMDB IDs can refer to unrelated movie and TV records.
         if (direct.map { it.series }.distinct().size > 1) return setOf(id)
-        val kind = direct.firstOrNull()?.series
-        var group = setOf(id)
+        val kind = direct.firstOrNull()?.series ?: false.takeIf { movieAliases.size > 1 }
+        var group = movieAliases
         do {
             val previous = group
-            group = group + entries.value.filter { row -> (kind == null || row.series == kind) && row.aliases.any { it in group } }.flatMap { it.aliases }
+            val providerAliases = entries.value.filter { row -> (kind == null || row.series == kind) && row.aliases.any { it in group } }.flatMap { it.aliases }
+            val movieAliases = if (kind == true) emptySet() else (group + providerAliases).flatMap { externalMovies.related(it) }.toSet()
+            group = group + providerAliases + movieAliases
         } while (previous != group)
         return group
     }
@@ -290,7 +321,8 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         val related = related(id, seriesHint)
         if (related == setOf(id) && entries.value.filter { id in it.aliases && (seriesHint == null || it.series == seriesHint) }.map { it.series }.distinct().size > 1) return id
         return related.firstOrNull { Regex("tt[0-9]+").matches(it) }
-            ?: entries.value.firstOrNull { (it.native == id || id in it.aliases) && (seriesHint == null || it.series == seriesHint) }?.canonical ?: id
+            ?: entries.value.firstOrNull { (it.native == id || id in it.aliases) && (seriesHint == null || it.series == seriesHint) }?.canonical
+            ?: externalMovies.canonical(id).takeUnless { seriesHint == true } ?: id
     }
     internal fun expand(ids: Set<String>): Set<String> = ids.flatMap { related(it) }.toSet()
     internal fun canProjectEpisode(sourceId: String, targetId: String, season: Int?, episode: Int?): Boolean {
@@ -321,7 +353,7 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         }
         if (requestedTarget != null && progress == value && !hasPartBinding(requestedTarget)) {
             val mapped = externalProgress(value)
-            if (mapped != value && requestedTarget in related(mapped.contentId, true) &&
+            if (mapped != value && requestedTarget in related(mapped.contentId, value.contentType in setOf("series", "tv")) &&
                 canProjectEpisode(mapped.contentId, requestedTarget, mapped.season, mapped.episode)) progress = mapped
         }
         if (requestedTarget != null && progress.contentId != requestedTarget && progress == value &&

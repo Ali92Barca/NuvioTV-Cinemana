@@ -41,7 +41,28 @@ import org.junit.Test
 import retrofit2.Response
 
 class StreamRepositoryPluginIsolationTest {
+    @Test fun `verified cached movie links publish while the public ID request is pending`() = runBlocking {
+        val addon = compatibleAddon().copy(
+            resources = listOf(AddonResource("stream", listOf("movie"), listOf("tt", "xt_"))))
+        val identities = mockk<SharedPlaybackIdentity> {
+            every { externalMovieSources(any(), null, "tt1341338") } returns listOf("xt_m_src_42")
+        }
+        val harness = newHarness(emptyList(), addon, identities = identities)
+        val slow = CompletableDeferred<Response<StreamResponseDto>>()
+        coEvery { harness.api.getStreams(match { it.contains("tt1341338") }) } coAnswers { slow.await() }
+        coEvery { harness.api.getStreams(match { it.contains("xt_m_src_42") }) } returns Response.success(
+            StreamResponseDto(listOf(StreamDto(url = "https://stream.example/native.mp4"))))
+        try {
+            val ready = withTimeout(3_000) { harness.repository.getStreamsFromAllAddons("movie", "tt1341338", null, null)
+                .first { it is NetworkResult.Success } } as NetworkResult.Success
+            assertEquals("https://stream.example/native.mp4", ready.data.single().streams.single().url)
+            assertTrue(slow.isActive)
+            coVerify(exactly = 1) { harness.api.getStreams(match { it.contains("xt_m_src_42") }) }
+        } finally { slow.complete(Response.success(StreamResponseDto(emptyList()))) }
+    }
+
     private fun seriesCanonical() = mockk<com.nuvio.tv.domain.model.Meta> {
+        every { id } returns "tt101"
         every { name } returns "Series"
         every { releaseInfo } returns "2020"
         every { released } returns null
@@ -97,6 +118,7 @@ class StreamRepositoryPluginIsolationTest {
                 id = "search", name = "Search", extra = listOf(com.nuvio.tv.domain.model.CatalogExtra("search")))),
             resources = listOf(AddonResource("stream", listOf("movie"), listOf("tt", "xt_"))))
         val canonical = mockk<com.nuvio.tv.domain.model.Meta> {
+            every { id } returns "tt1341338"
             every { name } returns "Movie"
             every { releaseInfo } returns "2020"
             every { released } returns null
@@ -121,6 +143,7 @@ class StreamRepositoryPluginIsolationTest {
                 id = "search", name = "Search", extra = listOf(com.nuvio.tv.domain.model.CatalogExtra("search")))),
             resources = listOf(AddonResource("stream", listOf("series"), listOf("tt", "xt_"))))
         val canonical = mockk<com.nuvio.tv.domain.model.Meta> {
+            every { id } returns "tt101"
             every { name } returns "Series"
             every { releaseInfo } returns "2020"
             every { released } returns null
@@ -289,7 +312,8 @@ class StreamRepositoryPluginIsolationTest {
     }
 
     private fun newHarness(enabledScrapers: List<ScraperInfo>, addon: Addon = compatibleAddon(),
-        canonical: com.nuvio.tv.domain.model.Meta? = null, coldCache: Boolean = false): Harness {
+        canonical: com.nuvio.tv.domain.model.Meta? = null, coldCache: Boolean = false,
+        identities: SharedPlaybackIdentity? = null): Harness {
         val api = mockk<AddonApi>()
         coEvery { api.getStreams(any()) } returns Response.success(
             StreamResponseDto(
@@ -341,7 +365,7 @@ class StreamRepositoryPluginIsolationTest {
                 tmdbService = tmdbService,
                 debridStreamPresentation = presentation,
                 localDebridAvailabilityService = availability,
-                externalAddonBridge = com.nuvio.tv.data.iptv.ExternalAddonBridge(api),
+                externalAddonBridge = com.nuvio.tv.data.iptv.ExternalAddonBridge(api, identities = identities),
                 metaRepository = mockk(relaxed = true) {
                     every { getCachedMeta(any(), any()) } returns if (coldCache) null else canonical
                     coEvery { getCachedBuiltinDetails(any(), any()) } returns null

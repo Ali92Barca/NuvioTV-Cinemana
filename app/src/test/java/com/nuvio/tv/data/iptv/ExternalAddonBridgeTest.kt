@@ -3,6 +3,11 @@ package com.nuvio.tv.data.iptv
 import com.nuvio.tv.data.remote.api.AddonApi
 import com.nuvio.tv.data.remote.dto.*
 import com.nuvio.tv.domain.model.*
+import com.nuvio.tv.data.mapper.toDomain
+import com.nuvio.tv.data.repository.SharedPlaybackIdentity
+import com.nuvio.tv.data.remote.api.TmdbApi
+import com.nuvio.tv.data.remote.api.TmdbDetailsResponse
+import com.nuvio.tv.data.remote.api.TmdbExternalIdsResponse
 import io.mockk.*
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
@@ -10,6 +15,34 @@ import org.junit.Test
 import retrofit2.Response
 
 class ExternalAddonBridgeTest {
+    @Test fun forwardMovieMatchLearnsNativeIdentityWithoutChangingPlaybackId() = runBlocking {
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        val source = addon().copy(resources = listOf(AddonResource("stream", listOf("movie"), listOf("xt_"))))
+        coEvery { api.getCatalog(any()) } returns Response.success(CatalogResponseDto(listOf(
+            MetaPreviewDto("xt_v_src_42", "movie", "Example", releaseInfo = "2020"))))
+        assertEquals("xt_v_src_42", ExternalAddonBridge(api, identities = identities).resolve(source, "movie", canonical(), null, null))
+        verify(exactly = 1) { identities.learnExternalMovie(source.baseUrl, "xt_v_src_42", "42", "tt1234567") }
+    }
+
+    @Test fun nativeMovieOpeningLearnsOfficialIdentityAndReusesVerifiedEnrichment() = runBlocking {
+        org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
+        val tmdb = mockk<TmdbApi>()
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        val source = addon().copy(resources = listOf(AddonResource("stream", listOf("movie"), listOf("xt_"))))
+        val native = MetaDto("xt_v_src_42", "movie", "Example", releaseInfo = "2020", tmdbId = "42").toDomain("Movie")
+        coEvery { tmdb.getMovieDetails(42, any(), any()) } returns Response.success(TmdbDetailsResponse(42, title = "Example", releaseDate = "2020-01-01"))
+        coEvery { tmdb.getMovieExternalIds(42, any()) } returns Response.success(TmdbExternalIdsResponse(42, imdbId = "tt1234567"))
+        val bridge = ExternalAddonBridge(api, tmdb, identities)
+        repeat(2) {
+            val enriched = bridge.enrichNative(source, native)
+            assertEquals(native.id, enriched.id)
+            assertEquals("tt1234567", enriched.imdbId)
+            assertTrue(enriched.sharedProgressCompatible)
+        }
+        coVerify(exactly = 1) { tmdb.getMovieDetails(42, any(), any()) }
+        verify(exactly = 1) { identities.learnExternalMovie(source.baseUrl, native.id, "42", "tt1234567") }
+    }
+
     @Test fun verifiedEpisodeSurvivesTimeoutInALaterSearchCatalog() = retainedEpisode(true)
     @Test fun verifiedEpisodeSurvivesNetworkFailureInALaterSearchCatalog() = retainedEpisode(false)
     private fun retainedEpisode(timeout: Boolean) = kotlinx.coroutines.test.runTest {
@@ -52,7 +85,9 @@ class ExternalAddonBridgeTest {
             })))
         val addon = seriesAddon().copy(catalogs = seriesAddon().catalogs + CatalogDescriptor(
             ContentType.SERIES, id = "slow", name = "Slow", extra = listOf(CatalogExtra("search"))))
-        assertEquals("xt_s_src_1:2:36", ExternalAddonBridge(api, tmdb).resolve(addon, "series", canonical, 2, 8))
+        val bridge = ExternalAddonBridge(api, tmdb)
+        assertEquals("xt_s_src_1:2:36", bridge.resolve(addon, "series", canonical, 2, 8))
+        assertEquals("xt_s_src_1:2:37", bridge.resolve(addon, "series", canonical, 2, 9))
         coVerify(exactly = 1) { tmdb.getTvDetails(42, any(), any()) }
         coVerify(exactly = 1) { api.getCatalog(any()) }
     }

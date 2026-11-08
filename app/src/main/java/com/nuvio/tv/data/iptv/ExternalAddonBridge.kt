@@ -13,6 +13,8 @@ import com.nuvio.tv.domain.model.Meta
 import com.nuvio.tv.domain.model.Video
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -30,6 +32,14 @@ class ExternalAddonBridge @Inject constructor(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SearchEntry>?) = size > 128
     }
     private data class Info(val titles: Set<String>, val tmdbId: String?, val imdbId: String?, val arabic: Boolean, val turkish: Boolean)
+    private data class InfoEntry(val created: Long, val info: Info)
+    private val infoCache = object : LinkedHashMap<String, InfoEntry>(32, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, InfoEntry>?) = size > 128
+    }
+    private data class NativeEnrichment(val created: Long, val source: Meta, val result: Meta)
+    private val nativeEnrichments = object : LinkedHashMap<String, NativeEnrichment>(32, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, NativeEnrichment>?) = size > 32
+    }
     fun isXtream(addon: Addon) = addon.resources.any { resource ->
         resource.idPrefixes.orEmpty().any { it.startsWith("xt_") }
     }
@@ -43,10 +53,24 @@ class ExternalAddonBridge @Inject constructor(
     suspend fun resolve(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?) =
         resolveAll(addon, type, canonical, season, episode).singleOrNull()
 
+    fun cachedMovieIds(addon: Addon, id: String): List<String> {
+        val tmdb = Regex("tmdb:(?:movie:)?([0-9]+)").matchEntire(id)?.groupValues?.get(1)
+        val imdb = id.takeIf { Regex("tt[0-9]+").matches(it) }
+        if (tmdb == null && imdb == null) return emptyList()
+        return identities?.externalMovieSources(addon.baseUrl, tmdb, imdb).orEmpty()
+    }
+
     suspend fun resolveAll(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?,
         onResolved: (suspend (String) -> Unit)? = null): List<String> {
         val accepted = linkedSetOf<String>()
         return withTimeoutOrNull(25_000) {
+            if (type == "movie") {
+                val known = (cachedMovieIds(addon, canonical.id) + identities?.externalMovieSources(addon.baseUrl, canonical.tmdbId, canonical.imdbId).orEmpty()).distinct()
+                if (known.isNotEmpty()) {
+                    known.forEach { accepted.add(it); onResolved?.invoke(it) }
+                    return@withTimeoutOrNull accepted.toList()
+                }
+            }
             val info = info(canonical, type)
             val parts = if (type == "series" && season == 1) info.titles.mapNotNull { label -> splitPart(label)?.let { Triple(label, it.first, it.second) } } else emptyList()
             val partNumber = parts.map { it.third }.distinct().singleOrNull()
@@ -156,6 +180,7 @@ class ExternalAddonBridge @Inject constructor(
                     rows.mapNotNull(::candidate).distinct(), info.imdbId, info.tmdbId)
                     as? ExternalAddonTitleMatcher.Decision.Matched
                 if (match == null) emptyList() else {
+                    if (isXtream(addon)) identities?.learnExternalMovie(addon.baseUrl, match.candidate.originalId, info.tmdbId, info.imdbId)
                     if (accepted.add(match.candidate.originalId)) onResolved?.invoke(match.candidate.originalId)
                     accepted.toList()
                 }
@@ -178,7 +203,44 @@ class ExternalAddonBridge @Inject constructor(
     }
 
     /** Learn the inverse direction when a user opens an Xtream catalog title directly. */
-    suspend fun enrichNative(addon: Addon, native: Meta): Meta {
+    suspend fun enrichNative(addon: Addon, native: Meta): Meta = withContext(Dispatchers.IO) {
+        if (!isXtream(addon) || !native.id.startsWith("xt_")) return@withContext native
+        val key = hash(addon.baseUrl + "\u0000" + addon.version + "\u0000" + native.id)
+        val cached = synchronized(nativeEnrichments) { nativeEnrichments[key] }
+        if (cached != null && cached.source == native && System.nanoTime() - cached.created < 300_000_000_000L)
+            return@withContext cached.result
+        val result = if (native.apiType == "movie") enrichNativeMovie(addon, native) else enrichNativeSeries(addon, native)
+        if (result.sharedProgressCompatible) synchronized(nativeEnrichments) {
+            nativeEnrichments[key] = NativeEnrichment(System.nanoTime(), native, result)
+        }
+        result
+    }
+
+    private suspend fun enrichNativeMovie(addon: Addon, native: Meta): Meta {
+        val api = tmdb ?: return native
+        if (identities == null || !com.nuvio.tv.data.repository.externalMovieId(native.id) || BuildConfig.TMDB_API_KEY.isBlank()) return native
+        return withTimeoutOrNull(12_000) {
+            try {
+                val sourceYear = year(native.releaseInfo ?: native.released)
+                val match = native.tmdbId?.toIntOrNull()?.takeIf { it > 0 }?.let {
+                    com.nuvio.android.cinemana.CinemanaTmdbMatcher.Match(it, native.name, null, null, null, 200.0)
+                } ?: com.nuvio.android.cinemana.CinemanaTmdbMatcher(BuildConfig.TMDB_API_KEY)
+                    .match(ExternalAddonTitleMatcher.titleVariants(native.name).toList(), sourceYear, false, native.imdbId)
+                    ?: return@withTimeoutOrNull native
+                val response = api.getMovieDetails(match.tmdbId, BuildConfig.TMDB_API_KEY, "ar-SA")
+                val details = response.body()?.takeIf { response.isSuccessful && it.id == match.tmdbId } ?: return@withTimeoutOrNull native
+                val officialYear = year(details.releaseDate)
+                if (details.originalLanguage != "ar" && sourceYear != null && officialYear != null && kotlin.math.abs(sourceYear - officialYear) > 1) return@withTimeoutOrNull native
+                val imdb = api.getMovieExternalIds(match.tmdbId, BuildConfig.TMDB_API_KEY).body()?.imdbId
+                    ?.takeIf { Regex("tt[0-9]+").matches(it) }
+                if (conflicts(native.imdbId, imdb) || conflicts(native.tmdbId, match.tmdbId.toString())) return@withTimeoutOrNull native
+                identities.learnExternalMovie(addon.baseUrl, native.id, match.tmdbId.toString(), imdb ?: native.imdbId)
+                native.copy(tmdbId = match.tmdbId.toString(), imdbId = imdb ?: native.imdbId, sharedProgressCompatible = true)
+            } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { native }
+        } ?: native
+    }
+
+    private suspend fun enrichNativeSeries(addon: Addon, native: Meta): Meta {
         val api = tmdb ?: return native
         if (identities == null || !isXtream(addon) || native.apiType != "series" ||
             !Regex("xt_s_[A-Za-z0-9]+_[0-9]+").matches(native.id) || BuildConfig.TMDB_API_KEY.isBlank()) return native
@@ -242,6 +304,8 @@ class ExternalAddonBridge @Inject constructor(
         } ?: native
     }
     private suspend fun info(meta: Meta, type: String): Info {
+        val cacheKey = hash(listOf(type, meta.id, meta.name, meta.tmdbId, meta.imdbId, meta.releaseInfo, meta.released).joinToString("\u0000"))
+        synchronized(infoCache) { infoCache[cacheKey]?.takeIf { System.nanoTime() - it.created < 300_000_000_000L } }?.let { return it.info }
         val titles = linkedSetOf(meta.name)
         var id = meta.tmdbId
         if (tmdb != null && id == null) id = Regex("tmdb:(?:(?:tv|series|movie):)?([0-9]+)").matchEntire(meta.id)?.groupValues?.get(1)
@@ -256,10 +320,12 @@ class ExternalAddonBridge @Inject constructor(
         } catch (e: CancellationException) { throw e } catch (_: Exception) { /* optional ID lookup */ }
         var arabic = false
         var turkish = false
+        var detailsLoaded = false
         if (tmdb != null && !BuildConfig.TMDB_API_KEY.isBlank() && id?.toIntOrNull() != null) try {
             val details = if (type == "series") tmdb.getTvDetails(id.toInt(), BuildConfig.TMDB_API_KEY, "ar-SA")
                 else tmdb.getMovieDetails(id.toInt(), BuildConfig.TMDB_API_KEY, "ar-SA")
             details.body()?.takeIf { details.isSuccessful && it.id.toString() == id }?.let {
+                detailsLoaded = true
                 listOfNotNull(it.name, it.title, it.originalName, it.originalTitle).filter(String::isNotBlank).forEach(titles::add)
                 arabic = it.originalLanguage == "ar"
                 turkish = it.originalLanguage == "tr"
@@ -270,7 +336,8 @@ class ExternalAddonBridge @Inject constructor(
                     titles.addAll(existing)
                 }
             }
-            if (type == "series" && imdb == null) imdb = tmdb.getTvExternalIds(id.toInt(), BuildConfig.TMDB_API_KEY).body()?.imdbId
+            if (imdb == null) imdb = (if (type == "series") tmdb.getTvExternalIds(id.toInt(), BuildConfig.TMDB_API_KEY)
+                else tmdb.getMovieExternalIds(id.toInt(), BuildConfig.TMDB_API_KEY)).body()?.imdbId
             if (type == "series") {
                 val aliases = if (turkish) withTimeoutOrNull(2_000) {
                     tmdb.getTvAlternativeTitles(id.toInt(), BuildConfig.TMDB_API_KEY).body()?.tvTitles
@@ -279,7 +346,9 @@ class ExternalAddonBridge @Inject constructor(
             }
         } catch (e: CancellationException) { throw e } catch (_: Exception) { /* optional aliases */ }
         if (type == "series" && id != null && titles.none { splitPart(it) != null }) identities?.learnExternalCanonical(id, imdb)
-        return Info(titles, id, imdb, arabic, turkish)
+        return Info(titles, id, imdb, arabic, turkish).also { result ->
+            if (detailsLoaded) synchronized(infoCache) { infoCache[cacheKey] = InfoEntry(System.nanoTime(), result) }
+        }
     }
     internal fun splitPart(title: String): Pair<String, Int>? {
         val match = Regex("^(.+?)\\s+([2-9]|[1-9][0-9])$").matchEntire(title.trim()) ?: return null
