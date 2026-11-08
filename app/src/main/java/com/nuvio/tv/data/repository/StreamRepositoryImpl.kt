@@ -200,9 +200,9 @@ class StreamRepositoryImpl @Inject constructor(
         try {
             // Filter addons that support streams for this type and id
             val streamAddons = addons.filter { addon ->
-                val requestedId = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(
+                val requestedId = externalAddonBridge.streamRequestId(addon, type, com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(
                     addon.id, type, videoId, parentMetaId, season, episode
-                )
+                ))
                 addon.supportsStreamResource(type, requestedId) || externalAddonBridge.supports(addon, type)
             }
 
@@ -252,7 +252,8 @@ class StreamRepositoryImpl @Inject constructor(
                             }
                         }
                         try {
-                            val requestedId = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(addon.id, type, videoId, parentMetaId, season, episode)
+                            val requestedId = externalAddonBridge.streamRequestId(addon, type,
+                                com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(addon.id, type, videoId, parentMetaId, season, episode))
                             val searchNative = externalAddonBridge.isXtream(addon) && !requestedId.startsWith("xt_")
                             if (searchNative && type == "movie") {
                                 // Publish previously verified native links while the addon's public-ID

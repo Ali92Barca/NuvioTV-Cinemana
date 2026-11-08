@@ -43,6 +43,12 @@ class ExternalAddonBridge @Inject constructor(
     fun isXtream(addon: Addon) = addon.resources.any { resource ->
         resource.idPrefixes.orEmpty().any { it.startsWith("xt_") }
     }
+    /** Better Stream advertises tmdb: but does not resolve the typed movie route. */
+    fun streamRequestId(addon: Addon, type: String, id: String): String {
+        if (type != "movie" || !addon.id.startsWith("org.betterstream.") || !isXtream(addon)) return id
+        val number = Regex("tmdb:movie:([1-9][0-9]*)").matchEntire(id)?.groupValues?.get(1) ?: return id
+        return "tmdb:$number"
+    }
     fun supports(addon: Addon, type: String) = addon.resources.any {
         it.name == "stream" && (it.types.isEmpty() || type in it.types)
     } && catalogs(addon, type).isNotEmpty()

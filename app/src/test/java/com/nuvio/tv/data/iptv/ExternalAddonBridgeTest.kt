@@ -15,6 +15,14 @@ import org.junit.Test
 import retrofit2.Response
 
 class ExternalAddonBridgeTest {
+    @Test fun betterStreamMovieRequestsUseTheSupportedUntypedTmdbRouteOnly() {
+        val source = addon().copy(id = "org.betterstream.example", resources = listOf(AddonResource("stream", listOf("movie", "series"), listOf("xt_", "tmdb:"))))
+        assertEquals("tmdb:315635", bridge.streamRequestId(source, "movie", "tmdb:movie:315635"))
+        assertEquals("tmdb:969681", bridge.streamRequestId(source, "movie", "tmdb:movie:969681"))
+        listOf("tt2250912", "tmdb:315635", "xt_m_src_42").forEach { assertEquals(it, bridge.streamRequestId(source, "movie", it)) }
+        assertEquals("tmdb:274556:3:8", bridge.streamRequestId(source, "series", "tmdb:274556:3:8"))
+        assertEquals("tmdb:movie:315635", bridge.streamRequestId(source.copy(id = "org.nuvio.cee"), "movie", "tmdb:movie:315635"))
+    }
     @Test fun forwardMovieMatchLearnsNativeIdentityWithoutChangingPlaybackId() = runBlocking {
         val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
         val source = addon().copy(resources = listOf(AddonResource("stream", listOf("movie"), listOf("xt_"))))
