@@ -38,7 +38,7 @@ import org.junit.Test
 import retrofit2.Response
 
 class StreamRepositoryPluginIsolationTest {
-    @Test fun `nonempty direct IPTV links do not suppress verified native edition search`() = verifyNativeSearch(false)
+    @Test fun `canonical Xtream episode requests use verified native IDs without a discarded canonical request`() = verifyNativeSearch(false)
     @Test fun `cold metadata cache still resolves native IPTV instead of returning unverified direct links`() = verifyNativeSearch(true)
     private fun verifyNativeSearch(coldCache: Boolean) = runTest {
         val addon = compatibleAddon().copy(
@@ -67,6 +67,18 @@ class StreamRepositoryPluginIsolationTest {
         val groups = (results.last() as NetworkResult.Success).data
         assertEquals(listOf("https://stream.example/translated.m3u8"), groups.flatMap { it.streams }.map { it.url })
         coVerify(exactly = 1) { harness.api.getCatalog(any()) }
+        coVerify(exactly = 0) { harness.api.getStreams(match { it.contains("tt101") }) }
+    }
+    @Test fun `missing canonical metadata cannot return unverified Xtream inline or direct episodes`() = runTest {
+        val addon = compatibleAddon().copy(
+            catalogs = listOf(com.nuvio.tv.domain.model.CatalogDescriptor(com.nuvio.tv.domain.model.ContentType.SERIES,
+                id = "search", name = "Search", extra = listOf(com.nuvio.tv.domain.model.CatalogExtra("search")))),
+            resources = listOf(AddonResource("stream", listOf("series"), listOf("tt", "xt_"))))
+        val harness = newHarness(emptyList(), addon)
+        val results = harness.repository.getStreamsFromAllAddons("series", "tt101:1:1", 1, 1).toList()
+        assertTrue(results.none { it is NetworkResult.Success && it.data.any { group -> group.streams.isNotEmpty() } })
+        coVerify(exactly = 0) { harness.api.getStreams(any()) }
+        coVerify(exactly = 0) { harness.api.getMeta(any()) }
     }
     @Test
     fun `addon results arrive while plugin TMDB lookup is pending`() = runBlocking {

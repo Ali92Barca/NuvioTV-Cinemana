@@ -228,12 +228,12 @@ class StreamRepositoryImpl @Inject constructor(
                     launch {
                         try {
                             val requestedId = com.nuvio.android.cinemana.CinemanaRequestIdentity.streamId(addon.id, type, videoId, parentMetaId, season, episode)
-                            val directResult = if (addon.supportsStreamResource(type, requestedId)) {
+                            val searchNative = externalAddonBridge.isXtream(addon) && !requestedId.startsWith("xt_")
+                            val directResult = if (!(searchNative && type == "series") && addon.supportsStreamResource(type, requestedId)) {
                                 getStreamsFromAddon(addon, type, requestedId)
                             } else NetworkResult.Success(emptyList<Stream>())
                             val needsSearch = (directResult is NetworkResult.Success && directResult.data.isEmpty()) ||
                                 (directResult is NetworkResult.Error && directResult.code == 404)
-                            val searchNative = externalAddonBridge.isXtream(addon) && !requestedId.startsWith("xt_")
                             val streamsResult = if ((needsSearch || searchNative) &&
                                 externalAddonBridge.supports(addon, type)) {
                                 val contentId = parentMetaId ?: if (type == "series" && season != null && episode != null)
@@ -272,7 +272,7 @@ class StreamRepositoryImpl @Inject constructor(
                                     } else {
                                         // Stream endpoint returned empty - try inline
                                         // streams from meta response as fallback.
-                                        val inlineStreams = fetchInlineStreamsFromMeta(
+                                        val inlineStreams = if (searchNative && type == "series") emptyList() else fetchInlineStreamsFromMeta(
                                             addon, type, videoId
                                         )
                                         if (inlineStreams.isNotEmpty()) {

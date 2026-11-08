@@ -43,8 +43,9 @@ class ExternalAddonBridge @Inject constructor(
     suspend fun resolve(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?) =
         resolveAll(addon, type, canonical, season, episode).singleOrNull()
 
-    suspend fun resolveAll(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?): List<String> =
-        withTimeoutOrNull(25_000) {
+    suspend fun resolveAll(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?): List<String> {
+        val accepted = linkedSetOf<String>()
+        return withTimeoutOrNull(25_000) {
             val info = info(canonical, type)
             val parts = if (type == "series" && season == 1) info.titles.mapNotNull { label -> splitPart(label)?.let { Triple(label, it.first, it.second) } } else emptyList()
             val partNumber = parts.map { it.third }.distinct().singleOrNull()
@@ -54,50 +55,38 @@ class ExternalAddonBridge @Inject constructor(
                 ExternalAddonTitleMatcher.titleVariants(candidate.name).intersect(bases).isNotEmpty() &&
                 ExternalAddonTitleMatcher.titleVariants(candidate.name).intersect(numberedTitles).isEmpty()
             val titles = (parts.map { it.second } + info.titles).toSet()
-            val rows = mutableListOf<MetaPreviewDto>()
-            for (title in titles.take(4)) for (catalog in catalogs(addon, type)) {
-                val key = hash(listOf(addon.baseUrl, addon.version, catalog.id, type, title).joinToString("\u0000"))
-                val cached = synchronized(searches) { searches[key]?.takeIf { System.nanoTime() - it.created < 300_000_000_000L } }
-                if (cached != null) { rows += cached.rows; continue }
-                val response = api.getCatalog(url(addon, "catalog/${encode(type)}/${encode(catalog.id)}/search=${encode(title)}.json"))
-                if (!response.isSuccessful) return@withTimeoutOrNull emptyList()
-                val found = response.body()?.metas?.filterNotNull() ?: return@withTimeoutOrNull emptyList()
-                synchronized(searches) { searches[key] = SearchEntry(System.nanoTime(), found) }
-                rows += found
-            }
-            val candidates = rows.filter { it.type == type }.mapNotNull { row ->
-                val id = row.id ?: return@mapNotNull null
-                val name = row.name ?: return@mapNotNull null
-                ExternalAddonTitleMatcher.Candidate(id, name, year(row.releaseInfo ?: row.released), row.imdbId, row.tmdbId)
-            }.distinct()
+            val expectedVariants = titles.flatMap(ExternalAddonTitleMatcher::titleVariants).toSet()
             val expectedYear = if (info.arabic || (type == "series" && info.turkish)) null else year(canonical.releaseInfo ?: canonical.released)
-            if (type == "movie") {
-                val match = ExternalAddonTitleMatcher.choose(titles.toList(), expectedYear, candidates, info.imdbId, info.tmdbId)
-                    as? ExternalAddonTitleMatcher.Decision.Matched ?: return@withTimeoutOrNull emptyList()
-                return@withTimeoutOrNull listOf(match.candidate.originalId)
+            fun candidate(row: MetaPreviewDto): ExternalAddonTitleMatcher.Candidate? {
+                if (row.type != type) return null
+                return ExternalAddonTitleMatcher.Candidate(row.id ?: return null, row.name ?: return null,
+                    year(row.releaseInfo ?: row.released), row.imdbId, row.tmdbId)
             }
-            if (type != "series" || season == null || episode == null) return@withTimeoutOrNull emptyList()
-            val expected = canonical.videos.singleOrNull { it.season == season && it.episode == episode }
-                ?: return@withTimeoutOrNull emptyList()
-            val matches = candidates.filter {
-                val parent = isPartParent(it)
-                ExternalAddonTitleMatcher.choose(titles.toList(), if (parent) null else expectedYear, listOf(it),
-                    if (parent) null else info.imdbId, if (parent) null else info.tmdbId) is
-                    ExternalAddonTitleMatcher.Decision.Matched
+            fun matches(value: ExternalAddonTitleMatcher.Candidate): Boolean {
+                val parent = isPartParent(value)
+                return ExternalAddonTitleMatcher.choose(titles.toList(), if (parent) null else expectedYear, listOf(value),
+                    if (parent) null else info.imdbId, if (parent) null else info.tmdbId) is ExternalAddonTitleMatcher.Decision.Matched
             }
-            matches.take(12).mapNotNull { candidate ->
-                val response = api.getMeta(url(addon, "meta/${encode(type)}/${encode(candidate.originalId)}.json"))
-                if (!response.isSuccessful) return@mapNotNull null
-                val native = response.body()?.meta ?: return@mapNotNull null
-                if (native.id != candidate.originalId || native.type != type) return@mapNotNull null
-                val partParent = isPartParent(candidate)
-                if (!partParent && (conflicts(info.imdbId, native.imdbId) || conflicts(info.tmdbId, native.tmdbId))) return@mapNotNull null
+            suspend fun resolveCandidate(value: ExternalAddonTitleMatcher.Candidate): Pair<String, Boolean>? {
+                if (type != "series" || season == null || episode == null) return null
+                val expected = canonical.videos.singleOrNull { it.season == season && it.episode == episode } ?: return null
+                val response = try {
+                    withTimeoutOrNull(5_000) {
+                        api.getMeta(url(addon, "meta/${encode(type)}/${encode(value.originalId)}.json"))
+                    }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { null } ?: return null
+                if (!response.isSuccessful) return null
+                val native = response.body()?.meta ?: return null
+                if (native.id != value.originalId || native.type != type) return null
+                val partParent = isPartParent(value)
+                if (!partParent && (conflicts(info.imdbId, native.imdbId) || conflicts(info.tmdbId, native.tmdbId))) return null
                 val nativeSeason = if (partParent) partNumber!! else season
                 if (partParent) enrichNative(addon, native.toDomain("Episode"))
                 val completeSeason = canonical.videos.filter { it.season == season }
                 val nativeSeasonVideos = native.videos.orEmpty().filter { it.season == nativeSeason }
-                val airedSeason = completeSeason.filter { it.available != false && isEpisodeReleaseAired(it.released) != false }
-                val airedNumbers = airedSeason.mapNotNull { it.episode }.toSet()
+                val airedNumbers = completeSeason.filter { it.available != false && isEpisodeReleaseAired(it.released) != false }
+                    .mapNotNull { it.episode }.toSet()
                 val mapping = ExternalEpisodeNumbering.episodeMap(
                     canonical.videos.filter { it.season != null }.groupBy { it.season!! }
                         .mapValues { (_, videos) -> videos.mapNotNull { it.episode }.toSet() },
@@ -110,14 +99,11 @@ class ExternalAddonBridge @Inject constructor(
                     val publicId = info.imdbId ?: info.tmdbId?.let { "tmdb:tv:$it" }
                     if (info.turkish && !partParent && publicId != null)
                         identities?.invalidateExternalSeason(addon.baseUrl, native.id, nativeSeason, publicId)
-                    return@mapNotNull null
+                    return null
                 }
                 val expectedSeason = completeSeason.filter { it.episode in episodeMap }
-                val expectedNumbers = expectedSeason.mapNotNull { it.episode }.toSet()
-                // The owner permits ar works to bypass edition/count checks. Identity and
-                // an existing, unique native episode are still required. Part mapping is separate.
-                val video = nativeSeasonVideos.singleOrNull { it.episode == episodeMap[episode] } ?: return@mapNotNull null
-                if (!compatible(expected, video, info.arabic, expectedNumbers.size, info.turkish)) return@mapNotNull null
+                val video = nativeSeasonVideos.singleOrNull { it.episode == episodeMap[episode] } ?: return null
+                if (!compatible(expected, video, info.arabic, expectedSeason.size, info.turkish)) return null
                 val canonicalId = (if (partParent) canonical.id.takeIf { Regex("cinemana-series:[0-9]+|cee:[0-9]+").matches(it) } else null)
                     ?: info.tmdbId?.takeIf { partParent }?.let { "tmdb:tv:$it" }
                     ?: info.imdbId?.takeIf { Regex("tt[0-9]+").matches(it) }
@@ -128,12 +114,50 @@ class ExternalAddonBridge @Inject constructor(
                         val number = item.episode ?: return@mapNotNull null
                         val nativeNumber = episodeMap[number] ?: return@mapNotNull null
                         val source = nativeSeasonVideos.singleOrNull { it.episode == nativeNumber } ?: return@mapNotNull null
-                        if (compatible(item, source, info.arabic, expectedNumbers.size, info.turkish)) Triple(nativeNumber, source.id, number) else null
+                        if (compatible(item, source, info.arabic, expectedSeason.size, info.turkish)) Triple(nativeNumber, source.id, number) else null
                     }, allowPartAlias = partParent, canonicalVideos = if (canonicalId == canonical.id)
                         expectedSeason.mapNotNull { item -> item.episode?.let { it to item.id } }.toMap() else emptyMap())
-                video.id.takeIf { it.isNotBlank() }
-            }.distinct()
-        } ?: emptyList()
+                if (video.id.isBlank()) return null
+                val label = ExternalAddonTitleMatcher.normalize(native.name + " " + video.title.orEmpty())
+                val translated = label.contains("مترجم") || Regex("(?:^| )ar tr s(?: |$)").containsMatchIn(label)
+                return video.id to translated
+            }
+            val rows = mutableListOf<MetaPreviewDto>()
+            val seen = mutableSetOf<String>()
+            for (title in titles.take(4)) for (catalog in catalogs(addon, type)) {
+                val key = hash(listOf(addon.baseUrl, addon.version, catalog.id, type, title).joinToString("\u0000"))
+                val cached = synchronized(searches) { searches[key]?.takeIf { System.nanoTime() - it.created < 300_000_000_000L } }
+                val found = if (cached != null) cached.rows else {
+                    val response = try {
+                        api.getCatalog(url(addon, "catalog/${encode(type)}/${encode(catalog.id)}/search=${encode(title)}.json"))
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { continue }
+                    if (!response.isSuccessful) continue
+                    val result = response.body()?.metas?.filterNotNull() ?: continue
+                    synchronized(searches) { searches[key] = SearchEntry(System.nanoTime(), result) }
+                    result
+                }
+                rows += found
+                if (type != "series") continue
+                val candidates = found.mapNotNull(::candidate).distinct().filter(::matches)
+                    .sortedByDescending { ExternalAddonTitleMatcher.titleVariants(it.name).intersect(expectedVariants).size }
+                for (value in candidates.take(12)) {
+                    if (!seen.add(value.originalId)) continue
+                    val resolved = resolveCandidate(value) ?: continue
+                    accepted += resolved.first
+                    // A verified translated edition satisfies the requested Turkish episode.
+                    // Do not keep searching foreign/dubbed editions after finding it.
+                    if (info.turkish && resolved.second) return@withTimeoutOrNull accepted.toList()
+                }
+            }
+            if (type == "movie") {
+                val match = ExternalAddonTitleMatcher.choose(titles.toList(), expectedYear,
+                    rows.mapNotNull(::candidate).distinct(), info.imdbId, info.tmdbId)
+                    as? ExternalAddonTitleMatcher.Decision.Matched
+                if (match == null) emptyList() else listOf(match.candidate.originalId)
+            } else accepted.toList()
+        } ?: accepted.toList() // A slow later candidate must not discard an already verified episode.
+    }
 
     internal fun acceptsLayout(originalLanguage: String?, expected: Set<Int>, actual: Set<Int>, aired: Set<Int> = expected) =
         ExternalEpisodeNumbering.acceptsLayout(originalLanguage == "ar", expected, actual, aired)
@@ -235,10 +259,20 @@ class ExternalAddonBridge @Inject constructor(
                 listOfNotNull(it.name, it.title, it.originalName, it.originalTitle).filter(String::isNotBlank).forEach(titles::add)
                 arabic = it.originalLanguage == "ar"
                 turkish = it.originalLanguage == "tr"
+                if (type == "series" && turkish) {
+                    val existing = titles.toList()
+                    titles.clear()
+                    listOfNotNull(it.originalName, it.name).filter(String::isNotBlank).forEach(titles::add)
+                    titles.addAll(existing)
+                }
             }
             if (type == "series" && imdb == null) imdb = tmdb.getTvExternalIds(id.toInt(), BuildConfig.TMDB_API_KEY).body()?.imdbId
-            if (type == "series") tmdb.getTvAlternativeTitles(id.toInt(), BuildConfig.TMDB_API_KEY).body()?.tvTitles
-                .orEmpty().mapNotNull { it.title }.filter(String::isNotBlank).forEach(titles::add)
+            if (type == "series") {
+                val aliases = if (turkish) withTimeoutOrNull(2_000) {
+                    tmdb.getTvAlternativeTitles(id.toInt(), BuildConfig.TMDB_API_KEY).body()?.tvTitles
+                } else tmdb.getTvAlternativeTitles(id.toInt(), BuildConfig.TMDB_API_KEY).body()?.tvTitles
+                aliases.orEmpty().mapNotNull { it.title }.filter(String::isNotBlank).forEach(titles::add)
+            }
         } catch (e: CancellationException) { throw e } catch (_: Exception) { /* optional aliases */ }
         if (type == "series" && id != null && titles.none { splitPart(it) != null }) identities?.learnExternalCanonical(id, imdb)
         return Info(titles, id, imdb, arabic, turkish)

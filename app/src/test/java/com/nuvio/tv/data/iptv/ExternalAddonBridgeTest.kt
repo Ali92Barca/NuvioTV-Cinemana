@@ -10,6 +10,27 @@ import org.junit.Test
 import retrofit2.Response
 
 class ExternalAddonBridgeTest {
+    @Test fun verifiedEpisodeSurvivesTimeoutInALaterSearchCatalog() = retainedEpisode(true)
+    @Test fun verifiedEpisodeSurvivesNetworkFailureInALaterSearchCatalog() = retainedEpisode(false)
+    private fun retainedEpisode(timeout: Boolean) = kotlinx.coroutines.test.runTest {
+        val canonical = canonical()
+        every { canonical.videos } returns episodes()
+        val addon = seriesAddon().copy(catalogs = seriesAddon().catalogs + CatalogDescriptor(
+            ContentType.SERIES, id = "slow", name = "Slow", extra = listOf(CatalogExtra("search"))))
+        coEvery { api.getCatalog(match { it.contains("/all/") }) } returns Response.success(CatalogResponseDto(listOf(
+            MetaPreviewDto("xt_s_src_42", "series", "Example", releaseInfo = "2020"))))
+        coEvery { api.getCatalog(match { it.contains("/slow/") }) } coAnswers {
+            if (!timeout) throw java.io.IOException("Catalog unavailable")
+            kotlinx.coroutines.delay(30_000)
+            Response.success(CatalogResponseDto(emptyList()))
+        }
+        coEvery { api.getMeta(any()) } returns Response.success(MetaResponseDto(MetaDto(
+            "xt_s_src_42", "series", "Example", videos = (1..2).map {
+                VideoDto("xt_s_src_42:1:$it", title = "Episode $it", season = 1, episode = it)
+            })))
+        assertEquals(listOf("xt_s_src_42:1:1"), bridge.resolveAll(addon, "series", canonical, 1, 1))
+        coVerify(exactly = 1) { api.getMeta(any()) }
+    }
     @Test fun tmdbTurkishIdentityEnablesCountBasedNativeResolution() = runBlocking {
         // CI supplies the registered key; all requests in this test use mocks.
         org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
@@ -27,10 +48,13 @@ class ExternalAddonBridgeTest {
             MetaPreviewDto("xt_s_src_1", "series", "Uzak Şehir المدينة البعيدة", releaseInfo = "2018"))))
         coEvery { api.getMeta(any()) } returns Response.success(MetaResponseDto(MetaDto(
             "xt_s_src_1", "series", "Uzak Şehir المدينة البعيدة", videos = (29..63).map {
-                VideoDto("xt_s_src_1:2:$it", title = "Descriptive native label", released = "2026-01-05", season = 2, episode = it)
+                VideoDto("xt_s_src_1:2:$it", title = "AR-TR-S - Descriptive native label", released = "2026-01-05", season = 2, episode = it)
             })))
-        assertEquals("xt_s_src_1:2:36", ExternalAddonBridge(api, tmdb).resolve(seriesAddon(), "series", canonical, 2, 8))
+        val addon = seriesAddon().copy(catalogs = seriesAddon().catalogs + CatalogDescriptor(
+            ContentType.SERIES, id = "slow", name = "Slow", extra = listOf(CatalogExtra("search"))))
+        assertEquals("xt_s_src_1:2:36", ExternalAddonBridge(api, tmdb).resolve(addon, "series", canonical, 2, 8))
         coVerify(exactly = 1) { tmdb.getTvDetails(42, any(), any()) }
+        coVerify(exactly = 1) { api.getCatalog(any()) }
     }
     @Test fun verifiedTurkishCountMappingDoesNotRequireMatchingEpisodeTitlesOrDates() {
         val expected = episodes().first().copy(released = "2026-01-01")
