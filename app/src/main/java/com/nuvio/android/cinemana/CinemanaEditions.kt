@@ -3,6 +3,10 @@ package com.nuvio.android.cinemana
 import org.json.JSONObject
 
 object CinemanaEditions {
+    /** Search records use a language ID; allVideoInfo uses a language object. */
+    fun originalTurkishAudio(record: JSONObject): Boolean =
+        record.optString("language_lighttigerNb") == "25" ||
+            record.optJSONObject("videoLanguages")?.optString("en_title")?.trim()?.equals("Turkish", ignoreCase = true) == true
     private val dubbed = Regex("مدبلج|مدبلجة|dubbed|dublaj", RegexOption.IGNORE_CASE)
     private val subtitled = Regex("مترجم|مترجمة|subtitled", RegexOption.IGNORE_CASE)
 

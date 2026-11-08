@@ -324,7 +324,7 @@ class CinemanaResourceAdapter(
         }
         val originalArabic = details?.optString("original_language") == "ar"
         val originalTurkishEdition = details?.optString("original_language") == "tr" &&
-            record.optString("language_lighttigerNb") == "25" &&
+            CinemanaEditions.originalTurkishAudio(record) &&
             entry.aliases.none { Regex("مدبلج|dubbed|dublaj", RegexOption.IGNORE_CASE).containsMatchIn(it) }
         val directlyMatched = CinemanaEpisodeMapping.sharedEpisodeLayout(
             nativeEpisodes, seasonCounts, details?.optString("original_language")

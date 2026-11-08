@@ -7,11 +7,14 @@ import org.junit.Test
 
 class CinemanaEditionResolutionTest {
     @Test fun originalTurkishAbiSharesAllFiveAvailableSecondSeasonEpisodesWithMissingTmdbRuntime() = runBlocking {
+        assertTrue(CinemanaEditions.originalTurkishAudio(JSONObject("""{"language_lighttigerNb":"25"}""")))
+        assertTrue(CinemanaEditions.originalTurkishAudio(JSONObject("""{"videoLanguages":{"en_title":"Turkish"}}""")))
+        assertFalse(CinemanaEditions.originalTurkishAudio(JSONObject("""{"videoLanguages":{"en_title":"Arabic"}}""")))
         val episodes = org.json.JSONArray((1..23).map { number -> JSONObject()
             .put("nb", (100 + number).toString()).put("rootSeries", if (number == 1) "0" else "101")
             .put("en_title", "A.B.I.").put("season", "1").put("episodeNummer", number.toString()) })
         val client = CinemanaClient(transport = { url -> when {
-            "allVideoInfo" in url -> """{"nb":"101","en_title":"A.B.I.","kind":"2","language_lighttigerNb":"25","imdbUrlRef":"https://www.imdb.com/title/tt38282411/"}"""
+            "allVideoInfo" in url -> """{"nb":"101","en_title":"A.B.I.","kind":"2","videoLanguages":{"en_title":"Turkish","ar_title":"التركية"},"imdbUrlRef":"https://www.imdb.com/title/tt38282411/"}"""
             "videoSeason" in url -> episodes.toString()
             "AdvancedSearch" in url -> "[]"
             else -> error("Unexpected native request")
