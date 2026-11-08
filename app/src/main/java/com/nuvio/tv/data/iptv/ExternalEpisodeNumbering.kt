@@ -2,6 +2,31 @@ package com.nuvio.tv.data.iptv
 
 /** Recognize a complete cumulative season without guessing from a single episode. */
 internal object ExternalEpisodeNumbering {
+    /** Same-work translated editions may have different release availability. Never invent
+     * a coordinate for an absent episode or close a numbering gap by shifting later episodes. */
+    fun translatedMap(canonical: Map<Int, Set<Int>>, native: Map<Int, List<Int>>,
+        season: Int, nativeSeason: Int): Map<Int, Int>? {
+        if (season != nativeSeason || season <= 0) return null
+        val expected = canonical[season].orEmpty()
+        val actual = native[nativeSeason].orEmpty()
+        if (expected.isEmpty() || expected != (1..expected.size).toSet() || actual.isEmpty() ||
+            actual.distinct().size != actual.size) return null
+        val sorted = actual.sorted()
+        val offset = if (sorted.first() == 1) 0 else {
+            var preceding = 0
+            for (previous in 1 until season) {
+                val before = canonical[previous].orEmpty()
+                val source = native[previous].orEmpty()
+                if (before.isEmpty() || before != (1..before.size).toSet() ||
+                    source.size != before.size || source.distinct().size != source.size ||
+                    (source.toSet() != before && source.toSet() != before.map { it + preceding }.toSet())) return null
+                preceding += before.size
+            }
+            preceding.takeIf { it > 0 && sorted.first() == it + 1 } ?: return null
+        }
+        if (sorted != (offset + 1..offset + sorted.size).toList()) return null
+        return expected.filter { it + offset in actual }.associateWith { it + offset }.takeIf { it.isNotEmpty() }
+    }
     /** Turkish editions with equal season counts use sorted positions, independent of labels/dates. */
     fun episodeMap(canonical: Map<Int, Set<Int>>, native: Map<Int, List<Int>>, season: Int,
         nativeSeason: Int, aired: Set<Int>, arabic: Boolean, turkish: Boolean = false): Map<Int, Int>? {

@@ -56,6 +56,19 @@ object CinemanaEpisodeMapping {
     ): List<EpisodeRef>? = matchEpisodeCount(episodes, seasonCounts)
         ?: if (originalLanguage == "ar") normalizeContinuous(episodes, seasonCounts) else null
 
+    /** Original Turkish audio, with work identity already verified: an available
+     * contiguous prefix need not wait for every planned TMDB episode or its runtime. */
+    fun translatedTurkishPrefix(episodes: List<EpisodeRef>, seasonCounts: Map<Int, Int>): List<EpisodeRef>? {
+        val counts = seasonCounts.filterKeys { it > 0 }.toSortedMap()
+        if (episodes.isEmpty() || counts.isEmpty() || counts.keys.toList() != (1..counts.size).toList() ||
+            counts.values.any { it <= 0 } || episodes.map { it.videoId }.distinct().size != episodes.size ||
+            episodes.any { !validId(it.videoId) } || episodes.size > counts.values.sum()) return null
+        val normalized = normalizeContinuous(episodes, counts)
+        val coordinates = normalized.map { it.season to it.episode }.sortedWith(compareBy({ it.first }, { it.second }))
+        val expected = counts.flatMap { (season, count) -> (1..count).map { season to it } }.take(episodes.size)
+        return normalized.takeIf { coordinates == expected }
+    }
+
     /** Convert continuous anime numbering only when every source episode belongs
      * to season one and a complete TMDB season-count map explains the numbers. */
     fun normalizeContinuous(episodes: List<EpisodeRef>, seasonCounts: Map<Int, Int>): List<EpisodeRef> {

@@ -30,6 +30,14 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
             .map { row -> row.episodes.keys.filter { it.first == season }.map { it.second }.toSet() }
             .filter { it.isNotEmpty() && (count == null || it.size == count) }.distinct().singleOrNull()
     }
+    /** Providers may refresh at different times. Only growing contiguous prefixes agree. */
+    internal fun verifiedSeriesSeasonAvailable(tmdbId: String, season: Int): Set<Int>? {
+        val layouts = entries.value.filter { it.series && !it.partial && "tmdb:tv:$tmdbId" in it.aliases }
+            .map { row -> row.episodes.keys.filter { it.first == season }.map { it.second }.toSet() }
+            .filter { it.isNotEmpty() }
+        if (layouts.isEmpty() || layouts.any { it != (1..it.size).toSet() }) return null
+        return layouts.maxByOrNull { it.size }
+    }
     internal data class ExternalEpisode(val scope: String, val native: String, val nativeVideo: String,
         val nativeSeason: Int, val nativeEpisode: Int, val canonical: String,
         val canonicalSeason: Int, val canonicalEpisode: Int, val alias: Boolean = false,

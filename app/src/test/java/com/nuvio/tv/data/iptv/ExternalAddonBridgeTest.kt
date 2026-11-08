@@ -15,6 +15,47 @@ import org.junit.Test
 import retrofit2.Response
 
 class ExternalAddonBridgeTest {
+    @Test fun translatedStreamProofIsBoundedCachedAndIsolatedBySubscription() = runBlocking {
+        val source = addon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("xt_"))))
+        val native = MetaDto("xt_s_src_50302", "series", "Alikara", videos = listOf(
+            VideoDto("xt_s_src_50302:1:1", season = 1, episode = 1))).toDomain("Episode")
+        coEvery { api.getStreams(any()) } returns Response.success(StreamResponseDto(listOf(
+            StreamDto(description = "AR-TR-S - Alikara | يعرض الآن تركي مترجم"))))
+        assertTrue(bridge.translatedEdition(source, native))
+        assertTrue(bridge.translatedEdition(source, native))
+        coVerify(exactly = 1) { api.getStreams(any()) }
+        coEvery { api.getStreams(any()) } returns Response.success(StreamResponseDto(listOf(
+            StreamDto(description = "AR-TR-D - Alikara مدبلج"))))
+        assertFalse(bridge.translatedEdition(source.copy(baseUrl = "https://other.test"), native))
+        coVerify(exactly = 2) { api.getStreams(any()) }
+    }
+    @Test fun translatedProofRequiresAnArabicTranslatedTurkishEdition() {
+        assertTrue(bridge.translatedLabel("AR-TR-S - Alikara"))
+        assertTrue(bridge.translatedLabel("يعرض الآن تركي مترجم"))
+        assertTrue(bridge.translatedLabel("مسلسلات تركية مترجمة"))
+        assertFalse(bridge.translatedLabel("AR-TR-D - Alikara مدبلج"))
+        assertFalse(bridge.translatedLabel("ENGLISH SERIES (TR)"))
+        assertFalse(bridge.translatedLabel("فارسي"))
+    }
+    @Test fun translatedSiblingLayoutMapsOnlyCommonEpisodesWithoutRelaxingOtherEditions() {
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        every { identities.verifiedSeriesSeasonForCount(any(), any(), any()) } returns null
+        val bridge = ExternalAddonBridge(api, identities = identities)
+        val canonical = mapOf(1 to (1..8).toSet())
+        val native = mapOf(1 to (1..10).toList())
+        assertNull(bridge.verifiedSiblingMap("42", canonical, native, 1, 1, true))
+        assertEquals((1..8).associateWith { it }, bridge.verifiedSiblingMap("42", canonical, native, 1, 1, true, true))
+        assertNull(bridge.verifiedSiblingMap("42", canonical, native, 1, 1, false, true))
+    }
+    @Test fun verifiedPreviousSeasonAvailabilityDoesNotBlockAbiCumulativeSecondSeason() {
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        every { identities.verifiedSeriesSeasonForCount("42", 1, 18) } returns (1..18).toSet()
+        every { identities.verifiedSeriesSeasonForCount("42", 2, 5) } returns (1..5).toSet()
+        val bridge = ExternalAddonBridge(api, identities = identities)
+        assertEquals((1..5).associateWith { it + 18 }, bridge.verifiedSiblingMap("42",
+            mapOf(1 to (1..20).toSet(), 2 to (1..8).toSet()),
+            mapOf(1 to (1..18).toList(), 2 to (19..23).toList()), 2, 2, true))
+    }
     @Test fun numericPrimaryTitleUsesOfficialImdbProofWithoutJoiningASeparateNumberedPart() = runBlocking {
         org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
         val tmdb = mockk<TmdbApi>()

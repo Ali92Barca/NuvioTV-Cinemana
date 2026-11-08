@@ -323,9 +323,12 @@ class CinemanaResourceAdapter(
             CinemanaEpisodeMapping.EpisodeRef(it.videoId, it.season, it.episode, it.title)
         }
         val originalArabic = details?.optString("original_language") == "ar"
+        val originalTurkishEdition = details?.optString("original_language") == "tr" &&
+            record.optString("language_lighttigerNb") == "25" &&
+            entry.aliases.none { Regex("مدبلج|dubbed|dublaj", RegexOption.IGNORE_CASE).containsMatchIn(it) }
         val directlyMatched = CinemanaEpisodeMapping.sharedEpisodeLayout(
             nativeEpisodes, seasonCounts, details?.optString("original_language")
-        )
+        ) ?: if (originalTurkishEdition) CinemanaEpisodeMapping.translatedTurkishPrefix(nativeEpisodes, seasonCounts) else null
         val normalized = directlyMatched ?: CinemanaEpisodeMapping.normalizeContinuous(nativeEpisodes, seasonCounts)
         var individualVideos: Set<String>? = null
         val durationStatus = if (directlyMatched != null && match != null) true else if (type == "series" && details != null && match != null) {

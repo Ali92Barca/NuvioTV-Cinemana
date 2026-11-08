@@ -4,6 +4,20 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CinemanaEpisodeMappingRegressionTest {
+    @Test fun abiAvailableEpisodesNormalizeWithoutPlannedEpisodesOrRuntimeProof() {
+        val source = (1..23).map { CinemanaEpisodeMapping.EpisodeRef((1355384 + it * 3).toString(), 1, it, "Episode $it") }
+        val mapped = CinemanaEpisodeMapping.translatedTurkishPrefix(source, mapOf(1 to 18, 2 to 7))!!
+        assertEquals(18, mapped.count { it.season == 1 })
+        assertEquals((1..5).toList(), mapped.filter { it.season == 2 }.map { it.episode })
+        assertEquals(source.map { it.videoId }, mapped.map { it.videoId })
+    }
+    @Test fun translatedTurkishPrefixesAllowGrowthButRejectGapsAndOverlongCuts() {
+        val source = (1..8).map { CinemanaEpisodeMapping.EpisodeRef(it.toString(), 1, it, "Episode $it") }
+        assertEquals(source, CinemanaEpisodeMapping.translatedTurkishPrefix(source, mapOf(1 to 10)))
+        assertEquals(null, CinemanaEpisodeMapping.translatedTurkishPrefix(source - source[3], mapOf(1 to 10)))
+        assertEquals(null, CinemanaEpisodeMapping.translatedTurkishPrefix(source + source[0], mapOf(1 to 10)))
+        assertEquals(null, CinemanaEpisodeMapping.translatedTurkishPrefix(source, mapOf(1 to 6)))
+    }
     private val counts = mapOf(1 to 28, 2 to 35, 3 to 20)
 
     @Test

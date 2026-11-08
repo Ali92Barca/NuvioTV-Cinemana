@@ -4,6 +4,34 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ExternalEpisodeNumberingTest {
+    @Test fun translatedSharedEpisodesSurviveDifferentAvailabilityAndFutureGrowth() {
+        val source = mapOf(1 to (1..10).toList())
+        val first = ExternalEpisodeNumbering.translatedMap(mapOf(1 to (1..8).toSet()), source, 1, 1)!!
+        assertEquals((1..8).associateWith { it }, first)
+        assertFalse(first.containsKey(9))
+        val later = ExternalEpisodeNumbering.translatedMap(mapOf(1 to (1..9).toSet()), source, 1, 1)!!
+        assertEquals(9, later[9])
+        assertFalse(later.containsKey(10))
+        assertEquals((1..8).associateWith { it }, ExternalEpisodeNumbering.translatedMap(
+            mapOf(1 to (1..10).toSet()), mapOf(1 to (1..8).toList()), 1, 1))
+    }
+    @Test fun abiSecondSeasonMapsNineteenToOneWithoutChangingNativeCoordinates() {
+        val layout = mapOf(1 to (1..18).toSet(), 2 to (1..5).toSet())
+        val source = mapOf(1 to (1..18).toList(), 2 to (19..23).toList())
+        assertEquals((1..5).associateWith { it + 18 }, ExternalEpisodeNumbering.episodeMap(
+            layout, source, 2, 2, (1..5).toSet(), false, true))
+        assertEquals((1..5).associateWith { it + 18 }, ExternalEpisodeNumbering.translatedMap(layout, source, 2, 2))
+        assertEquals((1..4).associateWith { it + 18 }, ExternalEpisodeNumbering.translatedMap(
+            layout + (2 to (1..4).toSet()), source, 2, 2))
+    }
+    @Test fun translatedPartialMappingRejectsGapsDuplicatesUnknownOffsetsAndSeparateParts() {
+        val layout = mapOf(1 to (1..8).toSet())
+        listOf(listOf(1,2,4,5), listOf(1,2,2,3), (2..10).toList()).forEach { source ->
+            assertNull(ExternalEpisodeNumbering.translatedMap(layout, mapOf(1 to source), 1, 1))
+        }
+        assertNull(ExternalEpisodeNumbering.translatedMap(layout, mapOf(2 to (1..10).toList()), 1, 2))
+        assertNull(ExternalEpisodeNumbering.translatedMap(mapOf(2 to (1..5).toSet()), mapOf(2 to (19..23).toList()), 2, 2))
+    }
     private val canonical = mapOf(1 to (1..28).toSet(), 2 to (1..35).toSet(), 3 to (1..35).toSet())
     private val native = mapOf(1 to (1..28).toList(), 2 to (29..63).toList(), 3 to (64..71).toList())
     private fun offset(season: Int = 2, source: Map<Int, List<Int>> = native,

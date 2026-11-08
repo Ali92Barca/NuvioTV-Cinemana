@@ -11,6 +11,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SharedPlaybackIdentityTest {
+    @Test fun `future Cinemana episode reuses earlier IPTV watched progress without remarking`() {
+        val original = meta("cinemana-series:7", series = true, safe = true)
+        fun provider(count: Int) = original.copy(videos = (1..count).map {
+            original.videos.first().copy(id = "cinemana:${100 + it}", episode = it)
+        })
+        val native = "xt_s_src_50302"
+        registry.learn(provider(8), "tt1234")
+        registry.learnExternalSeason("https://example.test", native, "tt1234", 1, 1,
+            (1..8).map { Triple(it, "$native:1:$it", it) })
+        val extra = progress(native, 20, true).copy(episode = 9, videoId = "$native:1:9", position = 20000)
+        assertEquals(native, registry.progress(extra, original.id).contentId)
+        assertNull(registry.externalQuery(native, original.id, 1, 9))
+        registry.learn(provider(9), "tt1234")
+        registry.learnExternalSeason("https://example.test", native, "tt1234", 1, 1,
+            (1..9).map { Triple(it, "$native:1:$it", it) })
+        val linked = registry.progress(extra, original.id)
+        assertEquals(original.id, linked.contentId)
+        assertEquals("cinemana:109", linked.videoId)
+        assertEquals(9, linked.episode)
+        assertEquals(20000L, linked.position)
+        assertEquals(20L, linked.lastWatched)
+        assertEquals(native, extra.contentId)
+        assertNull(registry.externalQuery(native, original.id, 1, 10))
+    }
     @Test fun `Daha 17 native metadata links all 23 verified episodes and collapses duplicate progress`() = verifyNativeSibling(317883, "tt42764103", "Daha 17", 23, 25, 24)
     @Test fun `Omur native metadata links six episodes despite seventh TMDB episode`() = verifyNativeSibling(322280, "tt39333720", "Ömür Usta", 6, 7, 7)
     private fun verifyNativeSibling(tmdbId: Int, imdb: String, title: String, count: Int, total: Int, aired: Int) = kotlinx.coroutines.runBlocking {
@@ -52,6 +76,9 @@ class SharedPlaybackIdentityTest {
         assertNull(registry.verifiedSeriesSeason("123", 1))
         assertEquals(setOf(1), registry.verifiedSeriesSeasonForCount("123", 1, 1))
         assertEquals(setOf(1,2), registry.verifiedSeriesSeasonForCount("123", 1, 2))
+        assertEquals(setOf(1,2), registry.verifiedSeriesSeasonAvailable("123", 1))
+        registry.learn(peer.copy(videos = peer.videos + peer.videos.first().copy(id = "cee:9:1:3", episode = 3)), "tt1234")
+        assertNull(registry.verifiedSeriesSeasonAvailable("123", 1))
     }
     private val values = mutableMapOf<String, String>()
     private val editor = mockk<SharedPreferences.Editor>(relaxed = true) {
