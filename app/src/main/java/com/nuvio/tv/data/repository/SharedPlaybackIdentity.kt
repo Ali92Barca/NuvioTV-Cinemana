@@ -75,6 +75,15 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     private fun sourceScope(url: String) = java.security.MessageDigest.getInstance("SHA-256")
         .digest(url.trimEnd('/').toByteArray()).joinToString("") { "%02x".format(it) }
 
+    /** Revoke a disproven edition match without deleting any profile's actual watch records. */
+    @Synchronized internal fun invalidateExternalSeason(baseUrl: String, native: String, season: Int, canonical: String) {
+        val scope = sourceScope(baseUrl)
+        if (!externalRows.removeAll { it.scope == scope && it.native == native && it.nativeSeason == season &&
+                externalCanonical(it.canonical) == externalCanonical(canonical) }) return
+        check(prefs.edit().putString("external_episodes_v1", Gson().toJson(externalRows)).commit())
+        externalRevision.value += 1
+    }
+
     @Synchronized internal fun learnExternalEpisode(baseUrl: String, native: String, nativeVideo: String,
         nativeSeason: Int, nativeEpisode: Int, canonical: String, canonicalSeason: Int, canonicalEpisode: Int) {
         learnExternalSeason(baseUrl, native, canonical, nativeSeason, canonicalSeason,

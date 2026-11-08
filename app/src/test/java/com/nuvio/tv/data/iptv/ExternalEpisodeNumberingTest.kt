@@ -10,6 +10,27 @@ class ExternalEpisodeNumberingTest {
         expected: Map<Int, Set<Int>> = canonical, aired: Set<Int> = expected[season].orEmpty()) =
         ExternalEpisodeNumbering.offset(expected, source, season, season, aired, false)
 
+    @Test fun turkishEqualCountsUseOrderEvenWhenEarlierSeasonsAreNotInTheCatalog() {
+        val map = ExternalEpisodeNumbering.episodeMap(canonical,
+            mapOf(2 to (29..63).reversed().toList()), 2, 2, (1..35).toSet(), false, true)!!
+        assertEquals(36, map[8])
+        assertEquals(63, map[35])
+        assertEquals((1..35).toSet(), map.keys)
+    }
+    @Test fun turkishCurrentSeasonUsesAiredCountAndRejectsRecutEditions() {
+        assertEquals(71, ExternalEpisodeNumbering.episodeMap(canonical, native, 3, 3,
+            (1..8).toSet(), false, true)!![8])
+        assertNull(ExternalEpisodeNumbering.episodeMap(canonical,
+            mapOf(1 to (1..140).toList(), 2 to (1..175).toList(), 3 to (1..35).toList()),
+            3, 3, (1..8).toSet(), false, true))
+        assertNull(ExternalEpisodeNumbering.episodeMap(canonical, native + (2 to (29..62).toList()),
+            2, 2, (1..35).toSet(), false, true))
+    }
+    @Test fun turkishDuplicateCoordinatesCannotBeMappedByOrder() {
+        assertNull(ExternalEpisodeNumbering.episodeMap(canonical,
+            mapOf(2 to ((29..62).toList() + 62)), 2, 2, (1..35).toSet(), false, true))
+    }
+
     @Test fun cumulativeSecondSeasonKeepsAllThirtyFiveEpisodes() {
         assertEquals(28, offset())
         assertEquals(36, 8 + offset()!!)

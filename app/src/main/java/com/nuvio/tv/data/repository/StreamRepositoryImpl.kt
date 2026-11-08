@@ -240,7 +240,14 @@ class StreamRepositoryImpl @Inject constructor(
                                     videoId.removeSuffix(":$season:$episode") else videoId
                                 val canonical = metaRepository.getCachedMeta(type, contentId)
                                     ?: metaRepository.getCachedBuiltinDetails(type, contentId)
-                                if (canonical == null) directResult else {
+                                    ?: kotlinx.coroutines.withTimeoutOrNull(15_000) {
+                                        (metaRepository.getMetaFromAllAddons(type, contentId)
+                                            .first { it !is NetworkResult.Loading } as? NetworkResult.Success)?.data
+                                    }
+                                if (com.nuvio.tv.BuildConfig.DEBUG) Log.d(TAG, "External native search type=$type metadata=${canonical != null} season=$season episode=$episode")
+                                if (canonical == null) {
+                                    if (searchNative && type == "series") NetworkResult.Success(emptyList()) else directResult
+                                } else {
                                     val nativeIds = externalAddonBridge.resolveAll(addon, type, canonical, season, episode)
                                     val verified = nativeIds.filter { addon.supportsStreamResource(type, it) }.flatMap { nativeId ->
                                         (getStreamsFromAddon(addon, type, nativeId) as? NetworkResult.Success<List<Stream>>)?.data.orEmpty()

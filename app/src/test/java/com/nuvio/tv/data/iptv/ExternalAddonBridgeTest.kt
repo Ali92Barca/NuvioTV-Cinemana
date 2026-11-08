@@ -10,6 +10,36 @@ import org.junit.Test
 import retrofit2.Response
 
 class ExternalAddonBridgeTest {
+    @Test fun tmdbTurkishIdentityEnablesCountBasedNativeResolution() = runBlocking {
+        // CI supplies the registered key; all requests in this test use mocks.
+        org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
+        val tmdb = mockk<com.nuvio.tv.data.remote.api.TmdbApi>()
+        coEvery { tmdb.getTvDetails(42, any(), any()) } returns Response.success(
+            com.nuvio.tv.data.remote.api.TmdbDetailsResponse(42, name = "المدينة البعيدة", originalLanguage = "tr"))
+        coEvery { tmdb.getTvAlternativeTitles(42, any()) } returns Response.success(
+            com.nuvio.tv.data.remote.api.TmdbAlternativeTitlesResponse())
+        val canonical = canonical()
+        every { canonical.name } returns "المدينة البعيدة"
+        every { canonical.videos } returns episodes(season = 2, count = 35).map {
+            it.copy(title = "", released = "2025-11-03")
+        }
+        coEvery { api.getCatalog(any()) } returns Response.success(CatalogResponseDto(listOf(
+            MetaPreviewDto("xt_s_src_1", "series", "Uzak Şehir المدينة البعيدة", releaseInfo = "2018"))))
+        coEvery { api.getMeta(any()) } returns Response.success(MetaResponseDto(MetaDto(
+            "xt_s_src_1", "series", "Uzak Şehir المدينة البعيدة", videos = (29..63).map {
+                VideoDto("xt_s_src_1:2:$it", title = "Descriptive native label", released = "2026-01-05", season = 2, episode = it)
+            })))
+        assertEquals("xt_s_src_1:2:36", ExternalAddonBridge(api, tmdb).resolve(seriesAddon(), "series", canonical, 2, 8))
+        coVerify(exactly = 1) { tmdb.getTvDetails(42, any(), any()) }
+    }
+    @Test fun verifiedTurkishCountMappingDoesNotRequireMatchingEpisodeTitlesOrDates() {
+        val expected = episodes().first().copy(released = "2026-01-01")
+        val actual = VideoDto("xt_s_src_42:2:36", title = "Descriptive Turkish title",
+            released = "2026-01-05", season = 2, episode = 36)
+        assertTrue(bridge.compatible(expected, actual, arabic = false, count = 35, turkish = true))
+        assertFalse(bridge.compatible(expected, actual.copy(id = ""), arabic = false, count = 35, turkish = true))
+        assertFalse(bridge.compatible(expected, actual, arabic = false, count = 35))
+    }
     @Test fun arabicLanguageBypassesCountTitleAndDateConditionsButDoesNotChangePartMapping() {
         assertTrue(bridge.acceptsLayout("ar", setOf(1, 2), setOf(1, 2, 3, 4)))
         assertFalse(bridge.acceptsLayout("tr", setOf(1, 2), setOf(1, 2, 3, 4)))

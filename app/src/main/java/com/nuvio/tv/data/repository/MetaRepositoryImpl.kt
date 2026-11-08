@@ -894,6 +894,7 @@ class MetaRepositoryImpl @Inject constructor(
     override fun getCachedMeta(type: String, id: String): Meta? {
         if (ServerItemRef.isServerId(id)) return serverMetaCache[id]?.takeIf { !it.isExpired() }?.meta
         val cacheKey = metaLookupCacheKey(type, id)
-        return addonMetaCache[cacheKey]?.takeIf { !it.isExpired() }?.meta
+        return (addonMetaCache[cacheKey]?.takeIf { !it.isExpired() }
+            ?: primaryAddonMetaCache[cacheKey]?.takeIf { !it.isExpired() })?.meta
     }
 }

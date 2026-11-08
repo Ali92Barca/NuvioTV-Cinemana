@@ -38,7 +38,9 @@ import org.junit.Test
 import retrofit2.Response
 
 class StreamRepositoryPluginIsolationTest {
-    @Test fun `nonempty direct IPTV links do not suppress verified native edition search`() = runTest {
+    @Test fun `nonempty direct IPTV links do not suppress verified native edition search`() = verifyNativeSearch(false)
+    @Test fun `cold metadata cache still resolves native IPTV instead of returning unverified direct links`() = verifyNativeSearch(true)
+    private fun verifyNativeSearch(coldCache: Boolean) = runTest {
         val addon = compatibleAddon().copy(
             catalogs = listOf(com.nuvio.tv.domain.model.CatalogDescriptor(com.nuvio.tv.domain.model.ContentType.SERIES,
                 id = "search", name = "Search", extra = listOf(com.nuvio.tv.domain.model.CatalogExtra("search")))),
@@ -52,7 +54,7 @@ class StreamRepositoryPluginIsolationTest {
             every { videos } returns (1..2).map { com.nuvio.tv.domain.model.Video("tt101:1:$it", "Episode $it",
                 null, null, season = 1, episode = it, overview = null) }
         }
-        val harness = newHarness(emptyList(), addon, canonical)
+        val harness = newHarness(emptyList(), addon, canonical, coldCache)
         coEvery { harness.api.getCatalog(any()) } returns Response.success(com.nuvio.tv.data.remote.dto.CatalogResponseDto(listOf(
             com.nuvio.tv.data.remote.dto.MetaPreviewDto("xt_s_src_42", "series", "Series", releaseInfo = "2020"))))
         coEvery { harness.api.getMeta(any()) } returns Response.success(com.nuvio.tv.data.remote.dto.MetaResponseDto(
@@ -200,7 +202,7 @@ class StreamRepositoryPluginIsolationTest {
     }
 
     private fun newHarness(enabledScrapers: List<ScraperInfo>, addon: Addon = compatibleAddon(),
-        canonical: com.nuvio.tv.domain.model.Meta? = null): Harness {
+        canonical: com.nuvio.tv.domain.model.Meta? = null, coldCache: Boolean = false): Harness {
         val api = mockk<AddonApi>()
         coEvery { api.getStreams(any()) } returns Response.success(
             StreamResponseDto(
@@ -253,7 +255,12 @@ class StreamRepositoryPluginIsolationTest {
                 debridStreamPresentation = presentation,
                 localDebridAvailabilityService = availability,
                 externalAddonBridge = com.nuvio.tv.data.iptv.ExternalAddonBridge(api),
-                metaRepository = mockk(relaxed = true) { every { getCachedMeta(any(), any()) } returns canonical },
+                metaRepository = mockk(relaxed = true) {
+                    every { getCachedMeta(any(), any()) } returns if (coldCache) null else canonical
+                    coEvery { getCachedBuiltinDetails(any(), any()) } returns null
+                    every { getMetaFromAllAddons(any(), any(), any()) } returns if (canonical == null)
+                        flowOf(NetworkResult.Error("Missing metadata")) else flowOf(NetworkResult.Success(canonical))
+                },
                 serverStreams = mockk {
                     every { isNativeRequest(any()) } returns false
                     every { revision } returns 0

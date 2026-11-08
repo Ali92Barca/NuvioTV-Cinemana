@@ -85,6 +85,20 @@ class SharedPlaybackIdentityTest {
         assertEquals(2 to 36, restored.externalQuery("tt101", native, 2, 8))
         assertEquals(native, restored.progress(raw.copy(episode = 28)).contentId)
     }
+    @Test fun `revoking a recut season keeps verified seasons and other subscription scopes`() {
+        val native = "xt_s_src_42"
+        val source = "https://example.test/a"
+        registry.learnExternalEpisode(source, native, "$native:1:1", 1, 1, "tt101", 1, 1)
+        registry.learnExternalEpisode(source, native, "$native:3:8", 3, 8, "tt101", 3, 8)
+        registry.learnExternalEpisode("https://example.test/b", native, "$native:3:8", 3, 8, "tt101", 3, 8)
+        registry.invalidateExternalSeason(source, native, 3, "tt101")
+        val raw = progress(native, series = true).copy(addonBaseUrl = source)
+        assertEquals("tt101", registry.progress(raw).contentId)
+        assertEquals(native, registry.progress(raw.copy(season = 3, episode = 8)).contentId)
+        assertEquals("tt101", registry.progress(raw.copy(season = 3, episode = 8,
+            addonBaseUrl = "https://example.test/b")).contentId)
+        assertEquals(native, SharedPlaybackIdentity(context).progress(raw.copy(season = 3, episode = 8)).contentId)
+    }
     @Test fun `same Xtream id in two subscriptions requires matching source scope`() {
         val native = "xt_s_src_42"
         registry.learnExternalEpisode("https://example.test/account-a", native, "$native:1:1", 1, 1, "tt101", 1, 1)
