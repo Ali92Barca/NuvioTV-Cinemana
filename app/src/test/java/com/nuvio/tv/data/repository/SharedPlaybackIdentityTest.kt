@@ -250,10 +250,11 @@ class SharedPlaybackIdentityTest {
         assertFalse(verifiedEpisodeCoordinates(listOf(1 to 1, 1 to 1), official))
         assertFalse(verifiedEpisodeCoordinates(emptyList(), official))
     }
-    private fun repository(delegate: WatchProgressRepositoryImpl, identities: SharedPlaybackIdentity = registry): SharedWatchProgressRepository {
+    private fun repository(delegate: WatchProgressRepositoryImpl, identities: SharedPlaybackIdentity = registry,
+        watched: List<WatchedItem> = emptyList()): SharedWatchProgressRepository {
         every { delegate.allProgress } returns flowOf(emptyList())
         every { delegate.continueWatching } returns flowOf(emptyList())
-        every { delegate.watchedItems } returns flowOf(emptyList())
+        every { delegate.watchedItems } returns flowOf(watched)
         every { delegate.localIdentityProgress(any(), any(), any(), any()) } returns flowOf(null)
         every { delegate.localIdentityEpisodes(any(), any()) } returns flowOf(emptyMap())
         val resolver = mockk<SharedPlaybackResolver> {
@@ -273,8 +274,7 @@ class SharedPlaybackIdentityTest {
             callOriginal()
         }
         val backend = mockk<WatchProgressRepositoryImpl>(relaxed = true)
-        val repo = repository(backend, tracked)
-        every { backend.watchedItems } returns flowOf((1..100).map { WatchedItem("tt1234", "series", "Show", 1, it, 1L) })
+        val repo = repository(backend, tracked, (1..100).map { WatchedItem("tt1234", "series", "Show", 1, it, 1L) })
         val result = kotlinx.coroutines.withTimeout(10_000) { repo.watchedItems.first() }
         assertEquals(200, result.size)
         assertTrue(result.any { it.contentId == native && it.episode == 100 })
