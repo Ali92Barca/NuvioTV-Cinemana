@@ -15,6 +15,16 @@ import org.junit.Test
 import retrofit2.Response
 
 class ExternalAddonBridgeTest {
+    @Test fun verifiedEpisodeCacheRejectsConflictingEpisodeSuffixes() {
+        val identities = mockk<SharedPlaybackIdentity> {
+            every { externalEpisodeSources(any(), "tt38282411", 2, 2) } returns listOf("xt_s_src_42:2:20")
+        }
+        val bridge = ExternalAddonBridge(api, identities = identities)
+        assertEquals(listOf("xt_s_src_42:2:20"), bridge.cachedSeriesIds(addon(), "tt38282411:2:2", 2, 2))
+        assertTrue(bridge.cachedSeriesIds(addon(), "tt38282411:2:3", 2, 2).isEmpty())
+        assertTrue(bridge.cachedSeriesIds(addon(), "tmdb:movie:123:2:2", 2, 2).isEmpty())
+        assertTrue(bridge.cachedSeriesIds(addon(), "https://invalid.test/tt38282411", 2, 2).isEmpty())
+    }
     @Test fun translatedStreamProofIsBoundedCachedAndIsolatedBySubscription() = runBlocking {
         val source = addon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("xt_"))))
         val native = MetaDto("xt_s_src_50302", "series", "Alikara", videos = listOf(

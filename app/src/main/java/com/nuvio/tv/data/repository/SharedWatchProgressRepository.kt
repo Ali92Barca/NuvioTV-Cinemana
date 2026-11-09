@@ -31,12 +31,18 @@ class SharedWatchProgressRepository @Inject constructor(
     private fun latest(items: List<WatchProgress>) = identities.project(items).groupBy { it.contentId }
         .values.mapNotNull { group -> group.maxWithOrNull(compareBy<WatchProgress> { it.lastWatched }.thenBy { it.season ?: 0 }.thenBy { it.episode ?: 0 }) }
         .sortedByDescending { it.lastWatched }
-    override val allProgress = combine(delegate.allProgress, identityChanges) { items, _ -> latest(items) }.flowOn(Dispatchers.Default)
+    private val allProjection = HistoryProjectionCache<WatchProgress, List<WatchProgress>>()
+    private val continueProjection = HistoryProjectionCache<WatchProgress, List<WatchProgress>>()
+    private val watchedProjection = HistoryProjectionCache<WatchedItem, List<WatchedItem>>()
+    override val allProgress = combine(delegate.allProgress, identityChanges) { items, _ ->
+        allProjection.get(profiles.activeProfileId.value, identities.entries.value, identities.externalRevision.value, items) { latest(items) }
+    }.flowOn(Dispatchers.Default)
     override val continueWatching = combine(delegate.continueWatching, allProgress, identityChanges) { items, all, _ ->
         val newest = all.associateBy { it.contentId }
-        latest(items).filter { candidate -> (newest[candidate.contentId]?.lastWatched ?: 0L) <= candidate.lastWatched }
+        continueProjection.get(profiles.activeProfileId.value, identities.entries.value, identities.externalRevision.value, items) { latest(items) }.filter { candidate -> (newest[candidate.contentId]?.lastWatched ?: 0L) <= candidate.lastWatched }
     }.flowOn(Dispatchers.Default)
     override val watchedItems = combine(delegate.watchedItems, identityChanges) { items, _ ->
+        watchedProjection.get(profiles.activeProfileId.value, identities.entries.value, identities.externalRevision.value, items) {
         // Resolve title aliases once per work, rather than once per watched episode.
         val targets = mutableMapOf<Pair<String, Boolean>, Set<String>>()
         items.flatMap { item ->
@@ -46,6 +52,7 @@ class SharedWatchProgressRepository @Inject constructor(
                 .flatMap { identities.related(it, seriesHint = series) }.toSet()
             }
                 .mapNotNull { target -> identities.watched(item, target).takeIf { it.contentId == target } }
+        }
         }
     }.flowOn(Dispatchers.Default)
     override fun getWatchedEpisodes(contentId: String): Flow<Set<Pair<Int, Int>>> =

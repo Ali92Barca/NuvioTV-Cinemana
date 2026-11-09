@@ -128,6 +128,7 @@ class WatchProgressSyncService @Inject constructor(
                 return Result.success(Unit)
             }
 
+            val deleteVersions = mutationStore.progressDeleteVersions(distinctKeys, profileId)
             val params = buildJsonObject {
                 put("p_keys", buildJsonArray {
                     distinctKeys.forEach { add(it) }
@@ -138,7 +139,7 @@ class WatchProgressSyncService @Inject constructor(
             withJwtRefreshRetry {
                 postgrest.rpc("sync_delete_watch_progress", params)
             }
-            mutationStore.acknowledgeProgressDeletes(distinctKeys, profileId)
+            mutationStore.acknowledgeProgressDeletes(distinctKeys, profileId, deleteVersions)
             Log.d(TAG, "Deleted ${distinctKeys.size} watch progress entries from remote for profile $profileId")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -393,6 +394,7 @@ class WatchProgressSyncService @Inject constructor(
                     val fallbackResult = pullSnapshotFromRemote(profileId, resetDeltaState = true)
                     return Result.success(fallbackResult)
                 }
+                val localRevision = watchProgressPreferences.getLocalRevision(profileId)
                 val remoteEntries = pullFromRemote(profileId).getOrElse { throw it }
                 val pendingUpsertKeys = mutationStore.pendingProgressUpserts(profileId).keys
                 val pendingDeleteKeys = mutationStore.pendingProgressDeletes(profileId)
@@ -400,7 +402,8 @@ class WatchProgressSyncService @Inject constructor(
                     remoteEntries.toMap(),
                     pendingUpsertKeys = pendingUpsertKeys,
                     pendingDeleteKeys = pendingDeleteKeys,
-                    profileId = profileId
+                    profileId = profileId,
+                    expectedLocalRevision = localRevision
                 )
                 watchProgressPreferences.setDeltaState(cursorBeforeSnapshot, initialized = true, profileId = profileId)
                 val finalLocalCount = watchProgressPreferences.getAllRawEntries(profileId).size
@@ -424,6 +427,7 @@ class WatchProgressSyncService @Inject constructor(
 
             while (true) {
                 Log.d(TAG, "syncDeltaFromRemote: pulling progress delta page $page from cursor $cursor for profile $profileId")
+                val localRevision = watchProgressPreferences.getLocalRevision(profileId)
                 val events = try {
                     pullDeltaPage(profileId, cursor)
                 } catch (e: Exception) {
@@ -461,7 +465,8 @@ class WatchProgressSyncService @Inject constructor(
                     deletes = deletes,
                     pendingUpsertKeys = pendingUpsertKeys,
                     pendingDeleteKeys = pendingDeleteKeys,
-                    profileId = profileId
+                    profileId = profileId,
+                    expectedLocalRevision = localRevision
                 )
                 preservedLocalItems = preservedLocalItems || pagePreservedLocal
                 cursor = maxOf(cursor, events.maxOf { it.eventId })
@@ -495,6 +500,7 @@ class WatchProgressSyncService @Inject constructor(
         profileId: Int,
         resetDeltaState: Boolean
     ): WatchProgressRemoteSyncResult {
+        val localRevision = watchProgressPreferences.getLocalRevision(profileId)
         val remoteEntries = pullFromRemote(profileId).getOrElse { throw it }
         val pendingUpsertKeys = mutationStore.pendingProgressUpserts(profileId).keys
         val pendingDeleteKeys = mutationStore.pendingProgressDeletes(profileId)
@@ -502,7 +508,8 @@ class WatchProgressSyncService @Inject constructor(
             remoteEntries.toMap(),
             pendingUpsertKeys = pendingUpsertKeys,
             pendingDeleteKeys = pendingDeleteKeys,
-            profileId = profileId
+            profileId = profileId,
+            expectedLocalRevision = localRevision
         )
         if (resetDeltaState) {
             watchProgressPreferences.setDeltaState(0L, initialized = false, profileId = profileId)

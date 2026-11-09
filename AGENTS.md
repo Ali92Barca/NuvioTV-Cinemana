@@ -39,3 +39,11 @@ Test 7 update: the owner approved disabling BetterPosters for IPTV/Xtream cards 
 The owner expanded Test 7 before delivery to include missing IPTV movie progress/watched unification. Keep movie identities separate from TV and subscription scopes hashed; colliding native IDs must not join unrelated works. Movie progress uses verified public IDs while native metadata/playback IDs stay unchanged. Keep additional public-ID stream editions when publishing cached native movie links early. Successful TMDB title information and exact native enrichment can be cached in bounded memory caches; no whole-catalog scans. Complete and test the combined scope before delivering another APK.
 
 For CBOX UI/performance checks requested by the owner, use the existing `test` profile (ID 5), keep account/settings data, and report actual observed cold/warm results and remaining problems. Computer shutdown was explicitly cancelled.
+
+# Performance comparison policy (owner confirmed 2026-11-09)
+
+Compare debug performance only against earlier debug builds, and official/release performance only against earlier official/release builds. Use the same device, test actions, profile, compilation state and cache conditions; report mismatches explicitly. If no comparable earlier measurement exists, report the standalone measurement without claiming improvement or regression. Never use a debug-versus-official comparison to judge a change. The owner explicitly excludes cosmetic player title/episode-number differences from the current fixes; prioritize correct episode playback, stable watched/unwatch synchronization, saved progress and navigation/link speed.
+
+# Test 12 authorization
+
+The owner explicitly approved implementing the entire reviewed fix package and building one comprehensive Test 12 after completing the combined changes and tests. Test 11 was delivered and installed; never reuse number11. Keep movie-name search and cosmetic player labels out of scope. Correct watched delta event order, protect newer local decisions from stale sync acknowledgements/pulls, preserve canonical episode/profiles/extra-episode behavior, reduce repeated history work and Home UI-thread load, and verify progressive links and metadata caching. Complete local checks before pushing because a push can start APK CI. Preserve account/service configuration and device data.

@@ -42,6 +42,9 @@ class SharedPlaybackIdentityTest {
         val native = "xt_s_src_41951"
         registry.learnExternalSeason("https://source.test", native, "tt38282411", 2, 2,
             (1..5).map { Triple(it+18,"$native:2:${it+18}",it) })
+        assertEquals(listOf("$native:2:20"), registry.externalEpisodeSources("https://source.test", "tt38282411", 2, 2))
+        assertTrue(registry.externalEpisodeSources("https://another-subscription.test", "tt38282411", 2, 2).isEmpty())
+        assertTrue(registry.externalEpisodeSources("https://source.test", "tt38282411", 2, 8).isEmpty())
         val public = progress("tt38282411", 20, true).copy(season = 2, episode = 2, videoId = "tt38282411:2:2")
         assertEquals("cinemana:1355444", registry.progress(public, base.id).videoId)
         assertEquals(base.id, registry.progress(public, base.id).contentId)
@@ -341,6 +344,8 @@ class SharedPlaybackIdentityTest {
         assertEquals("tt100", registry.progress(progress("tt100", series = true), duplicate).contentId)
         assertEquals("cinemana:2201", registry.progress(raw, "cinemana-series:22").videoId)
         assertEquals(2 to 1, registry.externalQuery(duplicate, "tt100", 1, 1))
+        assertEquals(listOf("$native:2:1"), registry.externalEpisodeSources(source, duplicate, 1, 1))
+        assertEquals(listOf("$native:1:1"), registry.externalEpisodeSources(source, "tt100", 1, 1))
         val flags = registry.watched(WatchedItem("tt100", "series", "Show", 2, 1, 1), duplicate)
         assertEquals(duplicate, flags.contentId)
         assertEquals(1, flags.season)

@@ -406,6 +406,19 @@ class WatchProgressPreferencesStorageTest {
         assertFalse(harness.preferences.getAllRawEntries().containsKey("boundary"))
     }
 
+    @Test fun `old remote progress snapshot cannot resurrect a locally removed episode`() = runTest {
+        val h = harness(emptyMap())
+        val mark = progress("item", 100)
+        h.preferences.saveProgress(mark, 1)
+        val revision = h.preferences.getLocalRevision(1)
+        h.preferences.removeProgress("item", profileId = 1)
+        val result = runCatching {
+            h.preferences.mergeRemoteEntries(mapOf("item" to mark), profileId = 1, expectedLocalRevision = revision)
+        }
+        assertTrue(result.exceptionOrNull() is StaleWatchStatePullException)
+        assertTrue(h.preferences.getAllRawEntries(1).isEmpty())
+    }
+
     private fun harness(entries: Map<String, WatchProgress>): Harness {
         val metadata = TestPreferencesDataStore(preferences(entries = entries))
         val recent = TestPreferencesDataStore()

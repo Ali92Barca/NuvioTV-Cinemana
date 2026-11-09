@@ -141,8 +141,11 @@ class WatchedSeriesStateHolder @Inject constructor(
         revalidateAt: Map<String, Long> = emptyMap(),
         profileId: Int = profileManager.activeProfileId.value
     ) {
-        val idsChanged = _fullyWatchedSeriesIds.value != ids
-        _fullyWatchedSeriesIds.value = identities.expand(ids)
+        if (profileManager.activeProfileId.value != profileId) return
+        val normalized = identities.expand(ids)
+        if (profileManager.activeProfileId.value != profileId) return
+        val idsChanged = _fullyWatchedSeriesIds.value != normalized
+        _fullyWatchedSeriesIds.value = normalized
         val now = System.currentTimeMillis()
         val defaultDeadline = now + DEFAULT_TTL_MS
         val updated = revalidateAfterMap.toMutableMap()

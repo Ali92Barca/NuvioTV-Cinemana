@@ -48,6 +48,7 @@ import java.security.MessageDigest
 import javax.inject.Inject
 
 private const val TAG = "StreamRepositoryImpl"
+private val streamTimingSequence = java.util.concurrent.atomic.AtomicLong()
 
 class StreamRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -195,6 +196,8 @@ class StreamRepositoryImpl @Inject constructor(
         hasCompatiblePlugins: Boolean,
         serverSources: List<ServerStreamSource>
     ): Flow<NetworkResult<List<AddonStreams>>> = kotlinx.coroutines.flow.channelFlow {
+        val requestStarted = android.os.SystemClock.elapsedRealtime()
+        val timingSequence = streamTimingSequence.incrementAndGet()
         send(NetworkResult.Loading)
 
         try {
@@ -224,18 +227,30 @@ class StreamRepositoryImpl @Inject constructor(
                 val completedJobs = java.util.concurrent.atomic.AtomicInteger(0)
 
                 // Launch addon jobs
-                streamAddons.forEach { addon ->
+                streamAddons.forEachIndexed { sourceIndex, addon ->
                     launch {
                         val addonScope = this
                         val nativeRequests = mutableListOf<kotlinx.coroutines.Deferred<List<Stream>>>()
                         val emittedKeys = mutableSetOf<String>()
+                        var firstPublished = false
+                        val timingSource = when (addon.baseUrl.trimEnd('/')) {
+                            com.nuvio.tv.data.cinemana.CinemanaAddonApi.BASE_URL.trimEnd('/') -> "cinemana"
+                            com.nuvio.tv.data.cee.CeeAddonApi.BASE_URL.trimEnd('/') -> "cee"
+                            else -> "external-$sourceIndex"
+                        }
                         val emissionMutex = kotlinx.coroutines.sync.Mutex()
                         suspend fun publishAvailable(streams: List<Stream>) {
                             emissionMutex.lock()
                             try {
                                 val fresh = streams.filter { emittedKeys.add(it.dedupKey()) }
                                     .map { it.copy(addonName = addon.displayName, addonLogo = addon.logo) }
-                                if (fresh.isNotEmpty()) resultChannel.send(AddonStreams(addon.displayName, addon.logo, fresh))
+                                if (fresh.isNotEmpty()) {
+                                    resultChannel.send(AddonStreams(addon.displayName, addon.logo, fresh))
+                                    if (!firstPublished && com.nuvio.tv.BuildConfig.DEBUG) {
+                                        Log.i("StreamTiming", "request=$timingSequence source=$timingSource firstMs=${android.os.SystemClock.elapsedRealtime() - requestStarted} streams=${fresh.size}")
+                                    }
+                                    firstPublished = true
+                                }
                             } finally { emissionMutex.unlock() }
                         }
                         val scheduledIds = mutableSetOf<String>()
@@ -260,13 +275,22 @@ class StreamRepositoryImpl @Inject constructor(
                                 // request runs. Keep that request to retain additional editions/qualities.
                                 externalAddonBridge.cachedMovieIds(addon, requestedId).forEach(::enqueueNative)
                             }
+                            val knownSeriesIds = if (type == "series")
+                                externalAddonBridge.cachedSeriesIds(addon, requestedId, season, episode) else emptyList()
+                            knownSeriesIds.forEach(::enqueueNative)
                             val directResult = if (!(searchNative && type == "series") && addon.supportsStreamResource(type, requestedId)) {
                                 getStreamsFromAddon(addon, type, requestedId)
                             } else NetworkResult.Success(emptyList<Stream>())
                             if (directResult is NetworkResult.Success) publishAvailable(directResult.data)
                             val needsSearch = (directResult is NetworkResult.Success && directResult.data.isEmpty()) ||
                                 (directResult is NetworkResult.Error && directResult.code == 404)
-                            val streamsResult = if ((needsSearch || searchNative) &&
+                            // The verified original episode can be fetched without waiting for
+                            // metadata/title matching. If it no longer supplies a link, fall back
+                            // to the normal search instead of trapping the user in a stale cache.
+                            val knownSeriesStreams = if (knownSeriesIds.isNotEmpty()) nativeRequests.flatMap { it.await() } else emptyList()
+                            val streamsResult = if (knownSeriesStreams.isNotEmpty()) {
+                                NetworkResult.Success(((directResult as? NetworkResult.Success<List<Stream>>)?.data.orEmpty() + knownSeriesStreams).distinctBy { it.dedupKey() })
+                            } else if ((needsSearch || searchNative) &&
                                 externalAddonBridge.supports(addon, type)) {
                                 val contentId = parentMetaId ?: if (type == "series" && season != null && episode != null)
                                     videoId.removeSuffix(":$season:$episode") else videoId

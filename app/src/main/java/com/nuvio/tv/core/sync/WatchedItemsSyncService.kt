@@ -275,6 +275,7 @@ class WatchedItemsSyncService @Inject constructor(
         profileId: Int
     ): Result<WatchedItemsRemoteSyncResult> {
         return try {
+            watchedItemsPreferences.ensureOrderedDeltaVersion(profileId)
             val deltaInitialized = watchedItemsPreferences.isDeltaInitialized(profileId)
             val deltaCursor = watchedItemsPreferences.getDeltaCursor(profileId)
             val localCount = watchedItemsPreferences.getAllItems(profileId).size
@@ -309,6 +310,7 @@ class WatchedItemsSyncService @Inject constructor(
 
             while (true) {
                 Log.d(TAG, "syncDeltaFromRemote: pulling delta page $page from cursor $cursor for profile $profileId")
+                val localRevision = watchedItemsPreferences.getLocalRevision(profileId)
                 val events = try {
                     pullDeltaPage(profileId, cursor)
                 } catch (e: Exception) {
@@ -321,23 +323,9 @@ class WatchedItemsSyncService @Inject constructor(
                     break
                 }
 
-                val upserts = events
-                    .filter { it.operation.equals(WATCHED_ITEM_EVENT_UPSERT, ignoreCase = true) }
-                    .map { event ->
-                        WatchedItem(
-                            contentId = event.contentId,
-                            contentType = event.contentType,
-                            title = event.title,
-                            season = event.season,
-                            episode = event.episode,
-                            watchedAt = event.watchedAt
-                        )
-                    }
-                val deletes = events
-                    .filter { it.operation.equals(WATCHED_ITEM_EVENT_DELETE, ignoreCase = true) }
-                    .map { event ->
-                        Triple(event.contentId, event.season, event.episode)
-                    }
+                val changes = reduceWatchedItemDelta(events)
+                val upserts = changes.upserts
+                val deletes = changes.deletes
 
                 val pendingUpsertKeys = mutationStore.pendingWatchedUpserts(profileId).keys
                 val pendingDeleteKeys = mutationStore.pendingWatchedDeletes(profileId)
@@ -346,7 +334,8 @@ class WatchedItemsSyncService @Inject constructor(
                     deletes = deletes,
                     pendingUpsertKeys = pendingUpsertKeys,
                     pendingDeleteKeys = pendingDeleteKeys,
-                    profileId = profileId
+                    profileId = profileId,
+                    expectedLocalRevision = localRevision
                 )
                 cursor = maxOf(cursor, events.maxOf { it.eventId })
                 watchedItemsPreferences.setDeltaState(cursor, initialized = true, profileId = profileId)
@@ -378,6 +367,7 @@ class WatchedItemsSyncService @Inject constructor(
         profileId: Int,
         resetDeltaState: Boolean
     ): WatchedItemsRemoteSyncResult {
+        val localRevision = watchedItemsPreferences.getLocalRevision(profileId)
         val remoteWatchedItems = pullFromRemote(profileId).getOrElse { throw it }
         Log.d(TAG, "pullSnapshotFromRemote: snapshot returned ${remoteWatchedItems.size} watched items for profile $profileId")
         val pendingUpsertKeys = mutationStore.pendingWatchedUpserts(profileId).keys
@@ -386,7 +376,8 @@ class WatchedItemsSyncService @Inject constructor(
             remoteWatchedItems,
             pendingUpsertKeys = pendingUpsertKeys,
             pendingDeleteKeys = pendingDeleteKeys,
-            profileId = profileId
+            profileId = profileId,
+            expectedLocalRevision = localRevision
         )
         if (resetDeltaState) {
             watchedItemsPreferences.setDeltaState(0L, initialized = false, profileId = profileId)
@@ -438,6 +429,7 @@ class WatchedItemsSyncService @Inject constructor(
             val distinctKeys = keys.filterNot { ServerItemRef.isServerId(it.contentId) }.toSet()
             if (distinctKeys.isEmpty()) return Result.success(Unit)
 
+            val deleteVersions = mutationStore.watchedDeleteVersions(distinctKeys, profileId)
             val params = buildJsonObject {
                 put("p_profile_id", profileId)
                 put("p_keys", buildJsonArray {
@@ -455,7 +447,7 @@ class WatchedItemsSyncService @Inject constructor(
                 postgrest.rpc("sync_delete_watched_items", params)
             }
 
-            mutationStore.acknowledgeWatchedDeletes(distinctKeys, profileId)
+            mutationStore.acknowledgeWatchedDeletes(distinctKeys, profileId, deleteVersions)
             Log.d(TAG, "Deleted ${distinctKeys.size} watched items from remote for profile $profileId")
             Result.success(Unit)
         } catch (e: Exception) {

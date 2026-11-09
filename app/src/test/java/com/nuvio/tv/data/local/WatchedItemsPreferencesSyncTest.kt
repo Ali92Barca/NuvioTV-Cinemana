@@ -171,6 +171,56 @@ class WatchedItemsPreferencesSyncTest {
         assertSame(first.single(), second.single())
     }
 
+    @Test fun `old snapshot cannot restore a locally unmarked episode even after its pending delete was acknowledged`() = runTest {
+        val h = harness()
+        val mark = item("episode", 100)
+        h.preferences.markAsWatched(mark, 1)
+        val revision = h.preferences.getLocalRevision(1)
+        h.preferences.unmarkAsWatched("episode", 1, 2, 1)
+        val result = runCatching {
+            h.preferences.replaceWithRemoteItems(listOf(mark), profileId = 1, expectedLocalRevision = revision)
+        }
+        assertTrue(result.exceptionOrNull() is StaleWatchStatePullException)
+        assertTrue(h.preferences.getAllItems(1).isEmpty())
+    }
+
+    @Test fun `another profile change does not invalidate this profiles incoming snapshot`() = runTest {
+        val h = harness()
+        val revision = h.preferences.getLocalRevision(1)
+        h.preferences.markAsWatched(item("private", 100), 2)
+        h.preferences.replaceWithRemoteItems(listOf(item("remote", 200)), profileId = 1, expectedLocalRevision = revision)
+        assertEquals("remote", h.preferences.getAllItems(1).single().contentId)
+        assertEquals("private", h.preferences.getAllItems(2).single().contentId)
+    }
+
+    @Test fun `opaque IDs equal to JSON field names can be unmarked without touching another episode`() = runTest {
+        val h = harness()
+        for (id in listOf("episode", "season", "contentId", "title")) {
+            h.preferences.markAsWatched(item(id, 100), 1)
+            h.preferences.markAsWatched(item(id, 100).copy(episode = 3), 1)
+            h.preferences.unmarkAsWatched(id, 1, 2, 1)
+            assertEquals(listOf(3), h.preferences.getAllItems(1).filter { it.contentId == id }.map { it.episode })
+        }
+    }
+
+    @Test fun `upgrade reconciles a legacy delta cursor once without clearing local history`() = runTest {
+        val h = harness()
+        val watched = item("existing", 100)
+        h.preferences.markAsWatched(watched, 1)
+        h.stores.getValue(1).edit {
+            it[androidx.datastore.preferences.core.booleanPreferencesKey("watched_items_delta_initialized")] = true
+            it[androidx.datastore.preferences.core.longPreferencesKey("watched_items_delta_cursor")] = 999L
+        }
+        h.preferences.ensureOrderedDeltaVersion(1)
+        assertFalse(h.preferences.isDeltaInitialized(1))
+        assertEquals(0L, h.preferences.getDeltaCursor(1))
+        assertEquals(listOf(watched), h.preferences.getAllItems(1))
+        h.preferences.setDeltaState(1001, true, 1)
+        h.preferences.ensureOrderedDeltaVersion(1)
+        assertTrue(h.preferences.isDeltaInitialized(1))
+        assertEquals(1001L, h.preferences.getDeltaCursor(1))
+    }
+
     private fun harness(): Harness {
         val activeProfile = MutableStateFlow(1)
         val stores = mutableMapOf<Int, TestPreferencesStore>()
@@ -182,7 +232,8 @@ class WatchedItemsPreferencesSyncTest {
         every { profileManager.activeProfileId } returns activeProfile
         return Harness(
             preferences = WatchedItemsPreferences(factory, profileManager),
-            activeProfile = activeProfile
+            activeProfile = activeProfile,
+            stores = stores
         )
     }
 
@@ -197,6 +248,7 @@ class WatchedItemsPreferencesSyncTest {
 
     private data class Harness(
         val preferences: WatchedItemsPreferences,
-        val activeProfile: MutableStateFlow<Int>
+        val activeProfile: MutableStateFlow<Int>,
+        val stores: Map<Int, TestPreferencesStore>
     )
 }

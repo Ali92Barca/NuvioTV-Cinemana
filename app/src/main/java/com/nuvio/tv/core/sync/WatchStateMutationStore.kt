@@ -1,6 +1,7 @@
 package com.nuvio.tv.core.sync
 
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.google.gson.Gson
 import com.nuvio.tv.data.local.ProfileDataStoreFactory
@@ -23,6 +24,9 @@ private data class PendingWatchedUpsert(
     val item: WatchedItem
 )
 
+private data class ProgressDeleteVersion(val key: String, val revision: Long)
+private data class WatchedDeleteVersion(val key: WatchedMutationKey, val revision: Long)
+
 @Singleton
 class WatchStateMutationStore @Inject constructor(
     private val factory: ProfileDataStoreFactory
@@ -36,6 +40,10 @@ class WatchStateMutationStore @Inject constructor(
     private val progressDeletesKey = stringSetPreferencesKey("progress_deletes")
     private val watchedUpsertsKey = stringSetPreferencesKey("watched_upserts")
     private val watchedDeletesKey = stringSetPreferencesKey("watched_deletes")
+
+    private val deleteRevisionKey = longPreferencesKey("delete_revision")
+    private val progressDeleteVersionsKey = stringSetPreferencesKey("progress_delete_versions")
+    private val watchedDeleteVersionsKey = stringSetPreferencesKey("watched_delete_versions")
 
     private fun store(profileId: Int) = factory.get(profileId, FEATURE)
 
@@ -54,6 +62,8 @@ class WatchStateMutationStore @Inject constructor(
                 gson.toJson(PendingProgressUpsert(key, progress))
             }.toSet()
             preferences[progressDeletesKey] = preferences[progressDeletesKey].orEmpty() - entries.keys
+            preferences[progressDeleteVersionsKey] = (progressVersions(preferences[progressDeleteVersionsKey]) - entries.keys)
+                .map { (key, revision) -> gson.toJson(ProgressDeleteVersion(key, revision)) }.toSet()
         }
     }
 
@@ -66,6 +76,10 @@ class WatchStateMutationStore @Inject constructor(
                 gson.toJson(PendingProgressUpsert(key, progress))
             }.toSet()
             preferences[progressDeletesKey] = preferences[progressDeletesKey].orEmpty() + normalized
+            val revision = (preferences[deleteRevisionKey] ?: 0L) + 1L
+            preferences[deleteRevisionKey] = revision
+            preferences[progressDeleteVersionsKey] = (progressVersions(preferences[progressDeleteVersionsKey]) + normalized.associateWith { revision })
+                .map { (key, value) -> gson.toJson(ProgressDeleteVersion(key, value)) }.toSet()
         }
     }
 
@@ -94,10 +108,20 @@ class WatchStateMutationStore @Inject constructor(
         }
     }
 
-    suspend fun acknowledgeProgressDeletes(keys: Collection<String>, profileId: Int) {
+    suspend fun progressDeleteVersions(keys: Collection<String>, profileId: Int): Map<String, Long> {
+        val versions = progressVersions(store(profileId).data.first()[progressDeleteVersionsKey])
+        return keys.associateWith { versions[it] ?: 0L }
+    }
+
+    suspend fun acknowledgeProgressDeletes(keys: Collection<String>, profileId: Int,
+        expectedVersions: Map<String, Long>? = null) {
         if (keys.isEmpty()) return
         store(profileId).edit { preferences ->
-            preferences[progressDeletesKey] = preferences[progressDeletesKey].orEmpty() - keys.toSet()
+            val versions = progressVersions(preferences[progressDeleteVersionsKey])
+            val confirmed = keys.filter { expectedVersions == null || (versions[it] ?: 0L) == expectedVersions[it] }.toSet()
+            preferences[progressDeletesKey] = preferences[progressDeletesKey].orEmpty() - confirmed
+            preferences[progressDeleteVersionsKey] = (versions - confirmed)
+                .map { (key, value) -> gson.toJson(ProgressDeleteVersion(key, value)) }.toSet()
         }
     }
 
@@ -113,6 +137,8 @@ class WatchStateMutationStore @Inject constructor(
                 gson.toJson(PendingWatchedUpsert(key, item))
             }.toSet()
             val upsertKeys = items.mapTo(mutableSetOf(), WatchedItem::mutationKey)
+            preferences[watchedDeleteVersionsKey] = (watchedVersions(preferences[watchedDeleteVersionsKey]) - upsertKeys)
+                .map { (key, value) -> gson.toJson(WatchedDeleteVersion(key, value)) }.toSet()
             preferences[watchedDeletesKey] = parseWatchedDeletes(preferences[watchedDeletesKey])
                 .minus(upsertKeys)
                 .map(gson::toJson)
@@ -128,6 +154,10 @@ class WatchStateMutationStore @Inject constructor(
             preferences[watchedUpsertsKey] = pending.map { (key, item) ->
                 gson.toJson(PendingWatchedUpsert(key, item))
             }.toSet()
+            val revision = (preferences[deleteRevisionKey] ?: 0L) + 1L
+            preferences[deleteRevisionKey] = revision
+            preferences[watchedDeleteVersionsKey] = (watchedVersions(preferences[watchedDeleteVersionsKey]) + normalized.associateWith { revision })
+                .map { (key, value) -> gson.toJson(WatchedDeleteVersion(key, value)) }.toSet()
             preferences[watchedDeletesKey] = (parseWatchedDeletes(preferences[watchedDeletesKey]) + normalized)
                 .map(gson::toJson)
                 .toSet()
@@ -157,18 +187,30 @@ class WatchStateMutationStore @Inject constructor(
         }
     }
 
-    suspend fun acknowledgeWatchedDeletes(
-        keys: Collection<WatchedMutationKey>,
-        profileId: Int
-    ) {
+    suspend fun watchedDeleteVersions(keys: Collection<WatchedMutationKey>, profileId: Int): Map<WatchedMutationKey, Long> {
+        val versions = watchedVersions(store(profileId).data.first()[watchedDeleteVersionsKey])
+        return keys.associateWith { versions[it] ?: 0L }
+    }
+
+    suspend fun acknowledgeWatchedDeletes(keys: Collection<WatchedMutationKey>, profileId: Int,
+        expectedVersions: Map<WatchedMutationKey, Long>? = null) {
         if (keys.isEmpty()) return
         store(profileId).edit { preferences ->
-            preferences[watchedDeletesKey] = parseWatchedDeletes(preferences[watchedDeletesKey])
-                .minus(keys.toSet())
-                .map(gson::toJson)
-                .toSet()
+            val versions = watchedVersions(preferences[watchedDeleteVersionsKey])
+            val confirmed = keys.filter { expectedVersions == null || (versions[it] ?: 0L) == expectedVersions[it] }.toSet()
+            preferences[watchedDeletesKey] = (parseWatchedDeletes(preferences[watchedDeletesKey]) - confirmed).map(gson::toJson).toSet()
+            preferences[watchedDeleteVersionsKey] = (versions - confirmed)
+                .map { (key, value) -> gson.toJson(WatchedDeleteVersion(key, value)) }.toSet()
         }
     }
+
+    private fun progressVersions(raw: Set<String>?): Map<String, Long> = raw.orEmpty().mapNotNull {
+        runCatching { gson.fromJson(it, ProgressDeleteVersion::class.java) }.getOrNull()
+    }.associate { it.key to it.revision }
+
+    private fun watchedVersions(raw: Set<String>?): Map<WatchedMutationKey, Long> = raw.orEmpty().mapNotNull {
+        runCatching { gson.fromJson(it, WatchedDeleteVersion::class.java) }.getOrNull()
+    }.associate { it.key to it.revision }
 
     suspend fun hasPendingProgressMutations(profileId: Int): Boolean {
         val preferences = store(profileId).data.first()

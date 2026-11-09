@@ -832,10 +832,10 @@ class WatchProgressRepositoryImpl @Inject constructor(
 
         if (progress.isCompleted()) {
             val watchedItem = progress.toWatchedItem()
-            watchedItemsPreferences.markAsWatched(watchedItem, profileId = profileId)
             if (syncRemote) {
                 mutationStore.queueWatchedUpserts(listOf(watchedItem), profileId)
             }
+            watchedItemsPreferences.markAsWatched(watchedItem, profileId = profileId)
             if (syncRemote && authManager.isAuthenticated) {
                 triggerWatchedItemsSync(listOf(watchedItem), profileId = profileId)
             }
@@ -871,10 +871,10 @@ class WatchProgressRepositoryImpl @Inject constructor(
             .filter { it.isCompleted() }
             .map { progress -> progress.toWatchedItem() }
         if (completedWatchedItems.isNotEmpty()) {
-            watchedItemsPreferences.markAsWatchedBatch(completedWatchedItems, profileId = profileId)
             if (syncRemote) {
                 mutationStore.queueWatchedUpserts(completedWatchedItems, profileId)
             }
+            watchedItemsPreferences.markAsWatchedBatch(completedWatchedItems, profileId = profileId)
             if (syncRemote && authManager.isAuthenticated) {
                 triggerWatchedItemsSync(completedWatchedItems, profileId = profileId)
             }
@@ -1053,8 +1053,8 @@ class WatchProgressRepositoryImpl @Inject constructor(
         }
         watchProgressPreferences.saveProgress(completed, profileId = profileId)
         val watchedItem = completed.toWatchedItem(watchedAt = now)
-        watchedItemsPreferences.markAsWatched(watchedItem, profileId = profileId)
         mutationStore.queueWatchedUpserts(listOf(watchedItem), profileId)
+        watchedItemsPreferences.markAsWatched(watchedItem, profileId = profileId)
         if (broadcastTrackingHistory) {
             broadcastHistoryAdd(profileId, listOf(completed.toTrackingHistoryItem(now)))
             syncServerWatched(listOf(completed.toServerWatchMark()), played = true, profileId = profileId)
@@ -1097,8 +1097,8 @@ class WatchProgressRepositoryImpl @Inject constructor(
         }
         watchProgressPreferences.saveProgressBatch(completedList, profileId = profileId)
         val watchedItems = completedList.map { progress -> progress.toWatchedItem(watchedAt = now) }
-        watchedItemsPreferences.markAsWatchedBatch(watchedItems, profileId = profileId)
         mutationStore.queueWatchedUpserts(watchedItems, profileId)
+        watchedItemsPreferences.markAsWatchedBatch(watchedItems, profileId = profileId)
         broadcastHistoryAdd(profileId, completedList.map { it.toTrackingHistoryItem(now) })
         syncServerWatched(completedList.map { it.toServerWatchMark() }, played = true, profileId = profileId)
         triggerRemoteSync(profileId = profileId)

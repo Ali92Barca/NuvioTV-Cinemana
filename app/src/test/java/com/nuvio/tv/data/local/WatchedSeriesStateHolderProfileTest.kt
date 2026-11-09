@@ -78,6 +78,14 @@ class WatchedSeriesStateHolderProfileTest {
         assertEquals(setOf("tt1234"),factory.get(2,"watched_series_cache").data.first()[key])
     }
 
+    @Test fun `late badge evaluation from the previous profile cannot overwrite the active profile`() = runTest {
+        activeProfileFlow.value = 2
+        holder.loadFromDisk(2)
+        holder.updateWithValidation(setOf("old-profile"), setOf("old-profile"), profileId = 1)
+        assertEquals(emptySet<String>(), holder.fullyWatchedSeriesIds.value)
+        assertEquals(null, factory.get(2, "watched_series_cache").data.first()[stringSetPreferencesKey("fully_watched_ids")])
+    }
+
     @Test
     fun `loading another profile replaces the previous profile's series`() = runTest {
         factory.get(1, "watched_series_cache").edit { it[stringSetPreferencesKey("fully_watched_ids")] = setOf("tt0000001"); it[intPreferencesKey("validation_reset_version")] = 2 }

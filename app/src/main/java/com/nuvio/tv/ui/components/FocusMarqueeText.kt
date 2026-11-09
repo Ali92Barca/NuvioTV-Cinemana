@@ -4,6 +4,11 @@ import androidx.compose.foundation.basicMarquee
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -37,12 +42,23 @@ fun FocusMarqueeText(
     val textDirection = remember(text) { text.contentLayoutDirection() }
     val needsDirectionOverride = textDirection != currentDirection
 
-    val textModifier = if (focused) {
-        modifier.basicMarquee(iterations = MarqueeIterations, velocity = MarqueeVelocity)
+    // Do not insert an unbounded marquee layout while the remote is moving
+    // quickly through cards. Keep the normal ellipsized layout until focus settles.
+    var marqueeReady by remember(text) { mutableStateOf(false) }
+    LaunchedEffect(focused, text) {
+        marqueeReady = false
+        if (focused) {
+            delay(700)
+            marqueeReady = true
+        }
+    }
+    val animateMarquee = focused && marqueeReady
+    val textModifier = if (animateMarquee) {
+        modifier.basicMarquee(iterations = MarqueeIterations, velocity = MarqueeVelocity, initialDelayMillis = 0)
     } else {
         modifier
     }
-    val textOverflow = if (focused) TextOverflow.Clip else TextOverflow.Ellipsis
+    val textOverflow = if (animateMarquee) TextOverflow.Clip else TextOverflow.Ellipsis
 
     val content = @Composable {
         Text(

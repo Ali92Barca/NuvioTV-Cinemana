@@ -69,6 +69,11 @@ class WatchProgressPreferences @Inject constructor(
     private val deltaCursorKey = longPreferencesKey("watch_progress_delta_cursor")
     private val deltaInitializedKey = booleanPreferencesKey("watch_progress_delta_initialized")
     private val storageMutex = Mutex()
+    private val localRevisions = ConcurrentHashMap<Int, java.util.concurrent.atomic.AtomicLong>()
+    suspend fun getLocalRevision(profileId: Int): Long = storageMutex.withLock { localRevisions[profileId]?.get() ?: 0L }
+    private fun bumpLocalRevision(profileId: Int) {
+        localRevisions.computeIfAbsent(profileId) { java.util.concurrent.atomic.AtomicLong() }.incrementAndGet()
+    }
     private val initializedProfiles = mutableSetOf<Int>()
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
 
@@ -267,6 +272,7 @@ class WatchProgressPreferences @Inject constructor(
         profileId: Int = profileManager.activeProfileId.value
     ) {
         storageMutex.withLock {
+            bumpLocalRevision(profileId)
             ensureStorageLocked(profileId)
             val recent = readBucket(recentStore(profileId), profileId, true)
             val key = createKey(progress)
@@ -295,6 +301,7 @@ class WatchProgressPreferences @Inject constructor(
     ) {
         if (progressList.isEmpty()) return
         storageMutex.withLock {
+            bumpLocalRevision(profileId)
             ensureStorageLocked(profileId)
             val current = readBucketsLocked(profileId)
             val entries = mergeWatchProgressBuckets(current.recent, current.archive)
@@ -313,6 +320,7 @@ class WatchProgressPreferences @Inject constructor(
         profileId: Int = profileManager.activeProfileId.value
     ) {
         storageMutex.withLock {
+            bumpLocalRevision(profileId)
             ensureStorageLocked(profileId)
             val current = readBucketsLocked(profileId)
             val recent = current.recent.toMutableMap()
@@ -360,6 +368,7 @@ class WatchProgressPreferences @Inject constructor(
     ) {
         if (episodes.isEmpty()) return
         storageMutex.withLock {
+            bumpLocalRevision(profileId)
             ensureStorageLocked(profileId)
             val current = readBucketsLocked(profileId)
             val recent = current.recent.toMutableMap()
@@ -455,11 +464,15 @@ class WatchProgressPreferences @Inject constructor(
         lastSuccessfulPushMs: Long? = null,
         profileId: Int = profileManager.activeProfileId.value,
         removeMissingRemoteEntries: Boolean = true,
-        isNonTraktId: ((String) -> Boolean)? = null
+        isNonTraktId: ((String) -> Boolean)? = null,
+        expectedLocalRevision: Long? = null
     ): Boolean {
         var preservedLocalItems = false
         Log.d("WatchProgressPrefs", "mergeRemoteEntries: ${remoteEntries.size} remote entries, profile=$profileId, removeMissing=$removeMissingRemoteEntries")
         storageMutex.withLock {
+            if (expectedLocalRevision != null && (localRevisions[profileId]?.get() ?: 0L) != expectedLocalRevision) {
+                throw StaleWatchStatePullException()
+            }
             ensureStorageLocked(profileId)
             val current = readBucketsLocked(profileId)
             val local = mergeWatchProgressBuckets(current.recent, current.archive)
@@ -519,7 +532,8 @@ class WatchProgressPreferences @Inject constructor(
         pendingUpsertKeys: Set<String> = emptySet(),
         pendingDeleteKeys: Set<String> = emptySet(),
         lastSuccessfulPushMs: Long? = null,
-        profileId: Int = profileManager.activeProfileId.value
+        profileId: Int = profileManager.activeProfileId.value,
+        expectedLocalRevision: Long? = null
     ): Boolean {
         if (upserts.isEmpty() && deletes.isEmpty()) {
             Log.d(TAG, "applyRemoteChanges: no changes for profile $profileId")
@@ -529,6 +543,9 @@ class WatchProgressPreferences @Inject constructor(
         var beforeCount = 0
         var afterCount = 0
         storageMutex.withLock {
+            if (expectedLocalRevision != null && (localRevisions[profileId]?.get() ?: 0L) != expectedLocalRevision) {
+                throw StaleWatchStatePullException()
+            }
             ensureStorageLocked(profileId)
             val current = readBucketsLocked(profileId)
             val local = mergeWatchProgressBuckets(current.recent, current.archive)
@@ -584,6 +601,7 @@ class WatchProgressPreferences @Inject constructor(
      */
     suspend fun clearAll(profileId: Int = profileManager.activeProfileId.value) {
         storageMutex.withLock {
+            bumpLocalRevision(profileId)
             ensureStorageLocked(profileId)
             clearBucketLocked(recentStore(profileId))
             clearBucketLocked(archiveStore(profileId))
@@ -604,6 +622,7 @@ class WatchProgressPreferences @Inject constructor(
         isNonTraktId: (String) -> Boolean
     ) {
         storageMutex.withLock {
+            bumpLocalRevision(profileId)
             ensureStorageLocked(profileId)
             val current = readBucketsLocked(profileId)
             val map = mergeWatchProgressBuckets(current.recent, current.archive)

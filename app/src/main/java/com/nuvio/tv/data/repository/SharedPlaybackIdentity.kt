@@ -70,6 +70,18 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     }
     internal fun externalMovieSources(baseUrl: String, tmdb: String?, imdb: String?) =
         externalMovies.nativeIds(sourceScope(baseUrl), tmdb, imdb)
+
+    /** Reuse only verified episode edges for this subscription. Never synthesize
+     * a native video ID from a displayed/canonical episode number. */
+    @Synchronized internal fun externalEpisodeSources(baseUrl: String, id: String, season: Int, episode: Int): List<String> {
+        indexExternal()
+        val scope = sourceScope(baseUrl)
+        val source = if (nativePlaybackId(id) && !hasPartBinding(id) &&
+            canProjectEpisode(id, canonical(id, true), season, episode)) canonical(id, true) else id
+        val starts = (rowsByNative[Triple(id, season, episode)].orEmpty().filter { it.scope == scope } +
+            rowsByRef[Triple(externalCanonical(source), season, episode)].orEmpty()).map(::edge).toSet()
+        return episodeClosure(starts).filter { it.scope == scope }.map { it.nativeVideo }.distinct()
+    }
     private val externalCanonicalLinks = runCatching {
         Gson().fromJson<Map<String, String>>(prefs.getString("external_canonical_links_v1", "{}"),
             object : TypeToken<Map<String, String>>() {}.type).orEmpty()

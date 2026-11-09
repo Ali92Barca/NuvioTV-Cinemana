@@ -106,6 +106,37 @@ class WatchStateMutationStoreTest {
         assertFalse(recreated.hasPendingWatchedMutations(1))
     }
 
+    @Test fun `old delete acknowledgement cannot consume a later unwatch after rewatch`() = runTest {
+        val h = harness()
+        val key = WatchedMutationKey("show", 1, 2)
+        h.store.queueWatchedDeletes(listOf(key), 1)
+        val old = h.store.watchedDeleteVersions(listOf(key), 1)
+        h.store.queueWatchedUpserts(listOf(watched("show", 200)), 1)
+        h.store.queueWatchedDeletes(listOf(key), 1)
+        val latest = h.store.watchedDeleteVersions(listOf(key), 1)
+        h.store.acknowledgeWatchedDeletes(listOf(key), 1, old)
+        assertEquals(setOf(key), h.store.pendingWatchedDeletes(1))
+        assertTrue(latest.getValue(key) > old.getValue(key))
+        WatchStateMutationStore(h.factory).acknowledgeWatchedDeletes(listOf(key), 1, latest)
+        assertTrue(h.store.pendingWatchedDeletes(1).isEmpty())
+    }
+
+    @Test fun `old progress delete acknowledgement is isolated from a later delete and another profile`() = runTest {
+        val h = harness()
+        h.store.queueProgressDeletes(listOf("item"), 1)
+        val old = h.store.progressDeleteVersions(listOf("item"), 1)
+        h.store.queueProgressUpserts(mapOf("item" to progress("item", 200)), 1)
+        h.store.queueProgressDeletes(listOf("item"), 1)
+        h.store.queueProgressDeletes(listOf("item"), 2)
+        h.store.acknowledgeProgressDeletes(listOf("item"), 1, old)
+        assertEquals(setOf("item"), h.store.pendingProgressDeletes(1))
+        assertEquals(setOf("item"), h.store.pendingProgressDeletes(2))
+        val latest = h.store.progressDeleteVersions(listOf("item"), 1)
+        h.store.acknowledgeProgressDeletes(listOf("item"), 1, latest)
+        assertTrue(h.store.pendingProgressDeletes(1).isEmpty())
+        assertEquals(setOf("item"), h.store.pendingProgressDeletes(2))
+    }
+
     private fun harness(): Harness {
         val stores = mutableMapOf<Int, TestPreferencesStore>()
         val factory = mockk<ProfileDataStoreFactory>()

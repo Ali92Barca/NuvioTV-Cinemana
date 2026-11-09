@@ -118,6 +118,15 @@ class ExternalAddonBridge @Inject constructor(
         return identities?.externalMovieSources(addon.baseUrl, tmdb, imdb).orEmpty()
     }
 
+    fun cachedSeriesIds(addon: Addon, id: String, season: Int?, episode: Int?): List<String> {
+        if (season == null || episode == null) return emptyList()
+        val match = Regex("(tt[0-9]+|tmdb:(?:(?:tv|series):)?[0-9]+)(?::([0-9]+):([0-9]+))?")
+            .matchEntire(id) ?: return emptyList()
+        if (match.groupValues[2].isNotEmpty() &&
+            (match.groupValues[2].toIntOrNull() != season || match.groupValues[3].toIntOrNull() != episode)) return emptyList()
+        return identities?.externalEpisodeSources(addon.baseUrl, match.groupValues[1], season, episode).orEmpty()
+    }
+
     suspend fun resolveAll(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?,
         onResolved: (suspend (String) -> Unit)? = null): List<String> {
         val accepted = linkedSetOf<String>()

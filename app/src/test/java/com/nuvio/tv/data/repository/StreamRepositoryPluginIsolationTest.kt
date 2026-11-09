@@ -61,6 +61,47 @@ class StreamRepositoryPluginIsolationTest {
         } finally { slow.complete(Response.success(StreamResponseDto(emptyList()))) }
     }
 
+    @Test fun `verified episode links do not wait for metadata and keep original cumulative video ID`() = runBlocking {
+        val addon = compatibleAddon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("tt", "xt_"))))
+        val identities = mockk<SharedPlaybackIdentity> {
+            every { externalEpisodeSources(addon.baseUrl, "tt38282411", 2, 2) } returns listOf("xt_s_src_42:2:20")
+        }
+        // No canonical metadata is available: the verified cache must be sufficient.
+        val harness = newHarness(emptyList(), addon, identities = identities)
+        coEvery { harness.api.getStreams(match { it.contains("xt_s_src_42") }) } returns Response.success(
+            StreamResponseDto(listOf(StreamDto(url = "https://stream.example/original-episode.m3u8"))))
+        val ready = withTimeout(3000) {
+            harness.repository.getStreamsFromAllAddons("series", "tt38282411:2:2", 2, 2).first { it is NetworkResult.Success }
+        } as NetworkResult.Success
+        assertEquals("https://stream.example/original-episode.m3u8", ready.data.single().streams.single().url)
+        coVerify(exactly = 1) { harness.api.getStreams(match { it.contains("xt_s_src_42%3A2%3A20") || it.contains("xt_s_src_42:2:20") }) }
+        coVerify(exactly = 0) { harness.api.getMeta(any()) }
+        coVerify(exactly = 0) { harness.api.getCatalog(any()) }
+        coVerify(exactly = 0) { harness.api.getStreams(match { it.contains("tt38282411") }) }
+    }
+
+    @Test fun `empty cached episode falls back to fresh matching instead of hiding replacement links`() = runBlocking {
+        val addon = compatibleAddon().copy(
+            catalogs = listOf(com.nuvio.tv.domain.model.CatalogDescriptor(com.nuvio.tv.domain.model.ContentType.SERIES,
+                id = "search", name = "Search", extra = listOf(com.nuvio.tv.domain.model.CatalogExtra("search")))),
+            resources = listOf(AddonResource("stream", listOf("series"), listOf("tt", "xt_"))))
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true) {
+            every { externalEpisodeSources(addon.baseUrl, "tt101", 1, 1) } returns listOf("xt_s_src_42:1:1")
+        }
+        val harness = newHarness(emptyList(), addon, seriesCanonical(), identities = identities)
+        coEvery { harness.api.getStreams(match { it.contains("xt_s_src_42") }) } returns Response.success(StreamResponseDto(emptyList()))
+        coEvery { harness.api.getStreams(match { it.contains("xt_s_src_43") }) } returns Response.success(
+            StreamResponseDto(listOf(StreamDto(url = "https://stream.example/replacement.m3u8"))))
+        coEvery { harness.api.getCatalog(any()) } returns Response.success(com.nuvio.tv.data.remote.dto.CatalogResponseDto(
+            listOf(com.nuvio.tv.data.remote.dto.MetaPreviewDto("xt_s_src_43", "series", "Series", releaseInfo = "2020"))))
+        coEvery { harness.api.getMeta(any()) } returns nativeMeta("xt_s_src_43")
+        val ready = withTimeout(3000) { harness.repository.getStreamsFromAllAddons("series", "tt101:1:1", 1, 1)
+            .first { it is NetworkResult.Success } } as NetworkResult.Success
+        assertEquals("https://stream.example/replacement.m3u8", ready.data.single().streams.single().url)
+        coVerify(exactly = 1) { harness.api.getStreams(match { it.contains("xt_s_src_42") }) }
+        coVerify(exactly = 1) { harness.api.getStreams(match { it.contains("xt_s_src_43") }) }
+    }
+
     private fun seriesCanonical() = mockk<com.nuvio.tv.domain.model.Meta> {
         every { id } returns "tt101"
         every { name } returns "Series"

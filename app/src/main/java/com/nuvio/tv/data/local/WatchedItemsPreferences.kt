@@ -31,6 +31,7 @@ class WatchedItemsPreferences @Inject constructor(
     companion object {
         private const val FEATURE = "watched_items_preferences"
         private const val TAG = "WatchedItemsPrefs"
+        private const val ORDERED_DELTA_VERSION = 1
     }
 
     private fun store(profileId: Int = profileManager.activeProfileId.value) =
@@ -39,7 +40,9 @@ class WatchedItemsPreferences @Inject constructor(
     private val gson = Gson()
     private val watchedItemsKey = stringSetPreferencesKey("watched_items")
     private val lastSuccessfulPushMsKey = longPreferencesKey("last_successful_watched_push_ms")
+    private val deltaReducerVersionKey = androidx.datastore.preferences.core.intPreferencesKey("watched_delta_reducer_version")
     private val deltaCursorKey = longPreferencesKey("watched_items_delta_cursor")
+    private val localRevisionKey = longPreferencesKey("local_watch_revision")
     private val deltaInitializedKey = booleanPreferencesKey("watched_items_delta_initialized")
 
     // Decoded items per profile, keyed by their stored JSON. Every collector of observeAllItems
@@ -84,6 +87,19 @@ class WatchedItemsPreferences @Inject constructor(
         }
     }
 
+    /** Old clients could persist an obsolete upsert while advancing past its
+     * later delete. Reconcile once from an authoritative snapshot after upgrade;
+     * keep local history and pending user decisions intact. */
+    suspend fun ensureOrderedDeltaVersion(profileId: Int) {
+        store(profileId).edit { prefs ->
+            if ((prefs[deltaReducerVersionKey] ?: 0) < ORDERED_DELTA_VERSION) {
+                prefs[deltaInitializedKey] = false
+                prefs[deltaCursorKey] = 0L
+                prefs[deltaReducerVersionKey] = ORDERED_DELTA_VERSION
+            }
+        }
+    }
+
     suspend fun getDeltaCursor(profileId: Int = profileManager.activeProfileId.value): Long {
         val prefs = store(profileId).data.first()
         return prefs[deltaCursorKey] ?: 0L
@@ -98,6 +114,7 @@ class WatchedItemsPreferences @Inject constructor(
         store(profileId).edit { prefs ->
             prefs[deltaCursorKey] = cursor.coerceAtLeast(0L)
             prefs[deltaInitializedKey] = initialized
+            if (initialized) prefs[deltaReducerVersionKey] = ORDERED_DELTA_VERSION
         }
         Log.d(TAG, "setDeltaState: profile=$profileId cursor=${cursor.coerceAtLeast(0L)} initialized=$initialized")
     }
@@ -143,11 +160,14 @@ class WatchedItemsPreferences @Inject constructor(
         }
     }
 
+    suspend fun getLocalRevision(profileId: Int): Long = store(profileId).data.first()[localRevisionKey] ?: 0L
+
     suspend fun markAsWatched(
         item: WatchedItem,
         profileId: Int = profileManager.activeProfileId.value
     ) {
         store(profileId).edit { preferences ->
+            preferences[localRevisionKey] = (preferences[localRevisionKey] ?: 0L) + 1L
             val current = preferences[watchedItemsKey] ?: emptySet()
             val itemKey = watchedItemKey(item)
             val filtered = current.filterNot { json ->
@@ -163,6 +183,7 @@ class WatchedItemsPreferences @Inject constructor(
     ) {
         if (items.isEmpty()) return
         store(profileId).edit { preferences ->
+            preferences[localRevisionKey] = (preferences[localRevisionKey] ?: 0L) + 1L
             val current = preferences[watchedItemsKey] ?: emptySet()
             val newKeys = items.map { watchedItemKey(it) }.toSet()
             val filtered = current.filterNot { json ->
@@ -180,6 +201,7 @@ class WatchedItemsPreferences @Inject constructor(
     ) {
         val removeKey = buildWatchedKey(contentId, season, episode)
         store(profileId).edit { preferences ->
+            preferences[localRevisionKey] = (preferences[localRevisionKey] ?: 0L) + 1L
             val current = preferences[watchedItemsKey] ?: emptySet()
             val filtered = current.filterNot { json ->
                 extractWatchedItemKey(json) == removeKey
@@ -196,6 +218,7 @@ class WatchedItemsPreferences @Inject constructor(
         if (episodes.isEmpty()) return
         val removeKeys = episodes.map { (s, e) -> buildWatchedKey(contentId, s, e) }.toSet()
         store(profileId).edit { preferences ->
+            preferences[localRevisionKey] = (preferences[localRevisionKey] ?: 0L) + 1L
             val current = preferences[watchedItemsKey] ?: emptySet()
             val filtered = current.filterNot { json ->
                 extractWatchedItemKey(json) in removeKeys
@@ -230,7 +253,8 @@ class WatchedItemsPreferences @Inject constructor(
         deletes: List<Triple<String, Int?, Int?>>,
         pendingUpsertKeys: Set<WatchedMutationKey> = emptySet(),
         pendingDeleteKeys: Set<WatchedMutationKey> = emptySet(),
-        profileId: Int = profileManager.activeProfileId.value
+        profileId: Int = profileManager.activeProfileId.value,
+        expectedLocalRevision: Long? = null
     ) {
         if (upserts.isEmpty() && deletes.isEmpty()) {
             Log.d(TAG, "applyRemoteChanges: no changes for profile $profileId")
@@ -239,6 +263,9 @@ class WatchedItemsPreferences @Inject constructor(
         var beforeCount = 0
         var afterCount = 0
         store(profileId).edit { preferences ->
+            if (expectedLocalRevision != null && (preferences[localRevisionKey] ?: 0L) != expectedLocalRevision) {
+                throw StaleWatchStatePullException()
+            }
             val current = preferences[watchedItemsKey] ?: emptySet()
             beforeCount = current.size
             val itemsByKey = linkedMapOf<Triple<String, Int?, Int?>, WatchedItem>()
@@ -275,10 +302,14 @@ class WatchedItemsPreferences @Inject constructor(
         pendingUpsertKeys: Set<WatchedMutationKey> = emptySet(),
         pendingDeleteKeys: Set<WatchedMutationKey> = emptySet(),
         lastSuccessfulPushMs: Long? = null,
-        profileId: Int = profileManager.activeProfileId.value
+        profileId: Int = profileManager.activeProfileId.value,
+        expectedLocalRevision: Long? = null
     ): Boolean {
         var preservedLocalItems = false
         store(profileId).edit { preferences ->
+            if (expectedLocalRevision != null && (preferences[localRevisionKey] ?: 0L) != expectedLocalRevision) {
+                throw StaleWatchStatePullException()
+            }
             val current = preferences[watchedItemsKey] ?: emptySet()
             Log.d(TAG, "replaceWithRemoteItems: profile=$profileId current=${current.size} remote=${remoteItems.size}")
             val deduped = linkedMapOf<Triple<String, Int?, Int?>, WatchedItem>()
@@ -313,6 +344,7 @@ class WatchedItemsPreferences @Inject constructor(
 
     suspend fun clearAll(profileId: Int = profileManager.activeProfileId.value) {
         store(profileId).edit { preferences ->
+            preferences[localRevisionKey] = (preferences[localRevisionKey] ?: 0L) + 1L
             preferences.remove(watchedItemsKey)
             preferences.remove(deltaCursorKey)
             preferences.remove(deltaInitializedKey)
@@ -344,29 +376,39 @@ class WatchedItemsPreferences @Inject constructor(
         return watchedItemKey(item)
     }
 
-    private fun extractJsonStringField(json: String, field: String): String? {
+    private fun fieldValueStart(json: String, field: String): Int? {
         val marker = "\"$field\""
-        val fieldIdx = json.indexOf(marker)
-        if (fieldIdx < 0) return null
-        val colonIdx = json.indexOf(':', fieldIdx + marker.length)
-        if (colonIdx < 0) return null
-        val openQuote = json.indexOf('"', colonIdx + 1)
-        if (openQuote < 0) return null
-        val closeQuote = json.indexOf('"', openQuote + 1)
-        if (closeQuote < 0) return null
-        return json.substring(openQuote + 1, closeQuote)
+        var from = 0
+        while (true) {
+            val key = json.indexOf(marker, from)
+            if (key < 0) return null
+            var i = key + marker.length
+            while (i < json.length && json[i].isWhitespace()) i++
+            // A quoted value equal to the field name is not a JSON property.
+            if (i < json.length && json[i] == ':') {
+                i++
+                while (i < json.length && json[i].isWhitespace()) i++
+                return i.takeIf { it < json.length }
+            }
+            from = key + marker.length
+        }
+    }
+
+    private fun extractJsonStringField(json: String, field: String): String? {
+        val open = fieldValueStart(json, field) ?: return null
+        if (json[open] != '"') return null
+        var end = open + 1
+        while (end < json.length) {
+            // Let the existing Gson fallback handle escaped opaque identifiers.
+            if (json[end] == '\\') return null
+            if (json[end] == '"') return json.substring(open + 1, end)
+            end++
+        }
+        return null
     }
 
     private fun extractJsonIntField(json: String, field: String): Int? {
-        val marker = "\"$field\""
-        val fieldIdx = json.indexOf(marker)
-        if (fieldIdx < 0) return null
-        val colonIdx = json.indexOf(':', fieldIdx + marker.length)
-        if (colonIdx < 0) return null
-        // Skip whitespace after colon
-        var i = colonIdx + 1
-        while (i < json.length && json[i].isWhitespace()) i++
-        if (i >= json.length) return null
+        var i = fieldValueStart(json, field) ?: return null
         // Handle null
         if (json.startsWith("null", i)) return null
         // Parse integer
