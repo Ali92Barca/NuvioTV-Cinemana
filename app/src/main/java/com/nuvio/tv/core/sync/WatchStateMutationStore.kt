@@ -4,6 +4,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.nuvio.tv.data.local.ProfileDataStoreFactory
 import com.nuvio.tv.data.mediaserver.ServerItemRef
 import com.nuvio.tv.domain.model.WatchProgress
@@ -15,12 +16,16 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private data class PendingProgressUpsert(
+    @field:SerializedName(value = "key", alternate = ["a"])
     val key: String,
+    @field:SerializedName(value = "progress", alternate = ["b"])
     val progress: WatchProgress
 )
 
 private data class PendingWatchedUpsert(
+    @field:SerializedName(value = "key", alternate = ["a"])
     val key: WatchedMutationKey,
+    @field:SerializedName(value = "item", alternate = ["b"])
     val item: WatchedItem
 )
 

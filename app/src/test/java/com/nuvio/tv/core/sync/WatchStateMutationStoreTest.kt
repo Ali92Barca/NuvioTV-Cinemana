@@ -8,12 +8,42 @@ import com.nuvio.tv.domain.model.WatchedMutationKey
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import com.google.gson.Gson
+import com.nuvio.tv.domain.model.mutationKey
 
 class WatchStateMutationStoreTest {
+    @Test fun `official 1_0_2 pending JSON survives upgrade and rewrites with stable field names`() = runTest {
+        val h = harness()
+        val p = progress("legacy-progress", 100L)
+        val w = watched("legacy-watched", 200L)
+        val gson = Gson()
+        val backing = h.factory.get(5, "watch_state_pending_mutations")
+        // Actual installed official APK: o9.y0 has a:String/key,b:WatchProgress;
+        // o9.z0 has a:WatchedMutationKey,b:WatchedItem. Domain fields are kept.
+        backing.edit {
+            it[stringSetPreferencesKey("progress_upserts")] = setOf(gson.toJson(mapOf("a" to "legacy-key", "b" to p)))
+            it[stringSetPreferencesKey("watched_upserts")] = setOf(gson.toJson(mapOf("a" to w.mutationKey(), "b" to w)))
+        }
+        assertEquals(mapOf("legacy-key" to p), h.store.pendingProgressUpserts(5))
+        assertEquals(mapOf(w.mutationKey() to w), h.store.pendingWatchedUpserts(5))
+        assertTrue(h.store.pendingProgressUpserts(6).isEmpty())
+        assertTrue(h.store.pendingWatchedUpserts(6).isEmpty())
+        val newer = p.copy(lastWatched = 300L)
+        h.store.queueProgressUpserts(mapOf("new-key" to newer), 5)
+        h.store.queueWatchedUpserts(listOf(w.copy(contentId = "new-watched")), 5)
+        assertEquals(p, h.store.pendingProgressUpserts(5)["legacy-key"])
+        assertEquals(w, h.store.pendingWatchedUpserts(5)[w.mutationKey()])
+        val persisted = backing.data.first()
+        assertTrue(persisted[stringSetPreferencesKey("progress_upserts")].orEmpty().all { it.contains("\"key\"") && it.contains("\"progress\"") })
+        assertTrue(persisted[stringSetPreferencesKey("watched_upserts")].orEmpty().all { it.contains("\"key\"") && it.contains("\"item\"") })
+    }
     @Test
     fun `progress mutations stay isolated by profile`() = runTest {
         val harness = harness()
