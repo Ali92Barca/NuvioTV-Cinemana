@@ -73,6 +73,7 @@ jobs:
           grep -F '37414d95f3cee4bb8395f8fa294aaa2471c1f5113c6c2e92559ca18f9a26eff4' "$RUNNER_TEMP/candidate-certificate.txt"
           python3 scripts/verify-betterstream-release.py "$apk"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: BetterStream-full-release-candidate
           path: app/build/outputs/apk/full/release/app-full-universal-release.apk
@@ -84,6 +85,7 @@ jobs:
           name: BetterStream-service-test-results
           path: app/build/test-results/testFullDebugUnitTest/*.xml
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: BetterStream-release-verification
           path: |

@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from apk_storage_schema import defined_fields
 
 apk = Path(sys.argv[1])
 tools = Path(os.environ['ANDROID_HOME']) / 'build-tools/36.0.0'
@@ -22,7 +23,6 @@ for name in required:
     value = re.search(r'\b' + name + r'\s*=\s*"([^"]*)"', config)
     assert value and value[1].strip(), 'Missing registered service: ' + name
 
-mapping = Path('app/build/outputs/mapping/fullRelease/mapping.txt').read_text()
 schemas = {
     'com.nuvio.tv.data.repository.SharedPlaybackIdentity$ExternalEpisode': ['scope', 'native', 'nativeVideo', 'canonical', 'nativeSeason', 'nativeEpisode', 'canonicalSeason', 'canonicalEpisode'],
     'com.nuvio.tv.data.repository.SharedPlaybackIdentity$Stored': ['native', 'canonical', 'series', 'aliases', 'episodes', 'partial'],
@@ -35,11 +35,11 @@ schemas = {
     'com.nuvio.android.cinemana.CinemanaTmdbMatcher$Resolution': ['match', 'confirmedMissing'],
     'com.nuvio.android.cinemana.CinemanaTmdbMatcher$Match': ['tmdbId'],
 }
+actual = defined_fields(apk, schemas)
 for cls, fields in schemas.items():
-    block = re.search(r'^' + re.escape(cls) + r' -> ' + re.escape(cls) + r':\n(.*?)(?=^[^\s#][^\n]* -> [^\n]*:\s*$|\Z)', mapping, re.M | re.S)
-    assert block, 'R8 storage class missing/renamed: ' + cls
-    for field in fields:
-        assert re.search(r'\b' + re.escape(field) + r' -> ' + re.escape(field) + r'\s*$', block[1], re.M), 'R8 storage field renamed: ' + cls + '.' + field
+    assert cls in actual, 'R8 storage class missing/renamed: ' + cls
+    missing = set(fields) - actual[cls]
+    assert not missing, 'R8 storage fields missing/renamed: ' + cls + ': ' + ', '.join(sorted(missing))
 
 receipt = {'commit': os.environ.get('GITHUB_SHA'), 'package': 'com.ali92barca.nuviotv', 'versionName': '1.0.3', 'versionCode': 7, 'debuggable': False, 'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'registeredServices': required, 'stableStorageSchemas': list(schemas)}
 Path('release-candidate-verification.json').write_text(json.dumps(receipt, indent=2))
