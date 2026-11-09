@@ -75,7 +75,7 @@ class BuiltinDetailsStore @Inject constructor(
         check: suspend (Set<EpisodeKey>, Boolean) -> Boolean?
     ): Boolean? = binding("episodes|$key") { target ->
         if (episodes.isEmpty()) return@binding null
-        val saved = read(target) { gson.fromJson(it, Array<EpisodeKey>::class.java) }?.toSet().orEmpty()
+        val saved = readEpisodeKeys(target)
         val current = episodes.toSet()
         val extendsSaved = saved.isNotEmpty() && current.containsAll(saved)
         val unchecked = if (extendsSaved) current - saved else current
@@ -90,7 +90,7 @@ class BuiltinDetailsStore @Inject constructor(
         current: Set<EpisodeKey>,
         check: suspend (Set<EpisodeKey>) -> Map<EpisodeKey, Boolean?>
     ): Set<EpisodeKey>? = binding("episode-runtimes|$key") { target ->
-        val saved = read(target) { gson.fromJson(it, Array<EpisodeKey>::class.java) }?.toSet().orEmpty()
+        val saved = readEpisodeKeys(target)
         val retained = if (current.containsAll(saved)) saved else emptySet()
         val checks = check(current - retained)
         if (checks.values.any { it == false }) return@binding null
@@ -132,6 +132,14 @@ class BuiltinDetailsStore @Inject constructor(
             }
         }
     }
+
+    private fun readEpisodeKeys(target: File): Set<EpisodeKey> = read(target) { raw ->
+        val decoded = gson.fromJson(raw, Array<EpisodeKey>::class.java)
+        // Unknown/old schemas can decode with null IDs. Reject before hashing,
+        // including singleton sets whose hash is first used outside this read.
+        require(decoded.all { !it.id.isNullOrBlank() && it.season >= 0 && it.episode > 0 })
+        decoded.toSet()
+    }.orEmpty()
 
     private fun <T> read(target: File, parse: (String) -> T): T? = try {
         parse(AtomicFile(target).readFully().toString(Charsets.UTF_8))
