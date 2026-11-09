@@ -814,9 +814,9 @@ private fun EpisodeCard(
     }
     val strEpisode = stringResource(R.string.episodes_episode)
     val strUnavailable = stringResource(R.string.episodes_unavailable)
-    val episodeCode = remember(episode.episode, strEpisode) {
+    val episodeCode = remember(episode.displayEpisode, strEpisode) {
         val prefix = strEpisode.uppercase(Locale.getDefault())
-        episode.episode?.let { number -> "$prefix $number" } ?: prefix
+        episode.displayEpisode?.let { number -> "$prefix $number" } ?: prefix
     }
 
     val primaryColor = NuvioTheme.colors.Secondary
@@ -973,7 +973,7 @@ private fun EpisodeCard(
                 }
 
                 FocusMarqueeText(
-                    text = episode.title.localizeEpisodeTitle(context),
+                    text = remember(episode.title, episode.watchIdentity, context) { episode.displayTitle.localizeEpisodeTitle(context) },
                     focused = isFocused && !suppressMarquee,
                     style = titleStyle,
                     color = textPrimary,

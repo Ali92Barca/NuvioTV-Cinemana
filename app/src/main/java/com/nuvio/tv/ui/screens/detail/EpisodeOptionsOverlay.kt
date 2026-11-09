@@ -123,7 +123,7 @@ internal fun EpisodeOptionsOverlay(
     val detailsFocusRequester = remember { FocusRequester() }
     val detailsScrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
-    val title = episode.title.localizeEpisodeTitle(context)
+    val title = episode.displayTitle.localizeEpisodeTitle(context)
     val description = episode.overview?.trim().orEmpty()
     val titleStyle = episodeOverlayTitleStyle(title.length)
     val descriptionStyle = episodeOverlayDescriptionStyle(description.length)
@@ -182,10 +182,10 @@ internal fun EpisodeOptionsOverlay(
     }
     val episodeLabel = when {
         episode.season != null && episode.episode != null -> {
-            stringResource(R.string.season_episode_format, episode.season, episode.episode)
+            stringResource(R.string.season_episode_format, episode.displaySeason ?: episode.season, episode.displayEpisode ?: episode.episode)
         }
         episode.episode != null -> {
-            "${stringResource(R.string.episodes_episode)} ${episode.episode}"
+            "${stringResource(R.string.episodes_episode)} ${episode.displayEpisode}"
         }
         else -> stringResource(R.string.episodes_dialog_subtitle)
     }

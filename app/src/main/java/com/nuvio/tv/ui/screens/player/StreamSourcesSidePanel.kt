@@ -272,13 +272,13 @@ internal fun StreamSourcesSidePanel(
             val seasonEpisodeCode = if (uiState.currentSeason != null && uiState.currentEpisode != null) {
                 stringResource(
                     R.string.season_episode_format,
-                    uiState.currentSeason,
-                    uiState.currentEpisode
+                    uiState.displaySeason ?: uiState.currentSeason,
+                    uiState.displayEpisode ?: uiState.currentEpisode
                 )
             } else {
                 null
             }
-            val localizedEpisodeTitle = uiState.currentEpisodeTitle
+            val localizedEpisodeTitle = uiState.displayEpisodeTitle
                 ?.takeIf { it.isNotBlank() }
                 ?.localizeEpisodeTitle(context)
             val contentInfoText = when {

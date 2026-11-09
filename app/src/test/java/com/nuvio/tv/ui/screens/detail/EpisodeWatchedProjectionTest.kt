@@ -5,6 +5,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EpisodeWatchedProjectionTest {
+    @Test fun `unified manual mark is not erased by a source video id miss`() {
+        assertTrue(resolveEpisodeWatchedState(true,false,false,false,false,projectedWatched=true))
+        assertFalse(resolveEpisodeWatchedState(true,false,false,true,true,projectedWatched=true))
+    }
     @Test
     fun `unsupported video id resolution preserves Nuvio Sync watched state`() {
         assertTrue(

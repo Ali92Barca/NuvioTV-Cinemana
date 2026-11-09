@@ -1357,9 +1357,9 @@ fun PlayerScreen(
             onClose = { viewModel.onEvent(PlayerEvent.OnDismissPauseOverlay) },
             title = uiState.title,
             logo = uiState.logo,
-            episodeTitle = uiState.currentEpisodeTitle,
-            season = uiState.currentSeason,
-            episode = uiState.currentEpisode,
+            episodeTitle = uiState.displayEpisodeTitle,
+            season = uiState.displaySeason ?: uiState.currentSeason,
+            episode = uiState.displayEpisode,
             year = uiState.releaseYear,
             type = uiState.contentType,
             description = uiState.description,
@@ -2892,11 +2892,11 @@ private fun PlayerControlsOverlay(
                     if (uiState.currentSeason != null && uiState.currentEpisode != null) {
                         val seasonEpisodeCode = stringResource(
                             R.string.season_episode_format,
-                            uiState.currentSeason,
-                            uiState.currentEpisode
+                            uiState.displaySeason ?: uiState.currentSeason,
+                            uiState.displayEpisode ?: uiState.currentEpisode
                         )
                         val appContext = LocalContext.current
-                        val localizedEpisodeTitle = uiState.currentEpisodeTitle
+                        val localizedEpisodeTitle = uiState.displayEpisodeTitle
                             ?.takeIf { it.isNotBlank() }
                             ?.localizeEpisodeTitle(appContext)
                         val episodeInfo = if (localizedEpisodeTitle != null) {

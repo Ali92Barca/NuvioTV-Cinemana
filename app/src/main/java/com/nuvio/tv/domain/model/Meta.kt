@@ -203,8 +203,21 @@ data class Video(
     val runtime: Int? = null, // episode runtime in minutes
     /** Per-episode rating supplied by the addon, when it provides one. */
     val rating: Double? = null,
-    val available: Boolean? = null
-)
+    val available: Boolean? = null,
+    /** Presentation/watch identity only. id/season/episode remain the playback reference. */
+    val watchIdentity: EpisodeWatchIdentity? = null
+) {
+    val displaySeason: Int? get() = watchIdentity?.season ?: season
+    val displayEpisode: Int? get() = watchIdentity?.episode ?: episode
+    val displayTitle: String get() {
+        val target = watchIdentity ?: return title
+        if (target.season == season && target.episode == episode) return title
+        return title.replace(Regex("(?i)S0*${season}E0*${episode}(?![0-9])"),
+            "S${target.season.toString().padStart(2, '0')}E${target.episode.toString().padStart(2, '0')}")
+    }
+}
+
+data class EpisodeWatchIdentity(val contentId: String, val season: Int, val episode: Int)
 
 @Immutable
 data class MetaLink(

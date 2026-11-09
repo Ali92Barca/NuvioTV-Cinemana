@@ -17,14 +17,15 @@ class SharedWatchProgressRepository @Inject constructor(
     private val delegate: WatchProgressRepositoryImpl,
     private val identities: SharedPlaybackIdentity,
     private val resolver: SharedPlaybackResolver,
-    private val profiles: ProfileManager
+    private val profiles: ProfileManager,
+    private val seriesState: com.nuvio.tv.data.local.WatchedSeriesStateHolder? = null
 ) : WatchProgressRepository by delegate {
-    private fun localNativeIdentity(id: String) = nativePlaybackId(id) || externalMovieId(id) || id.startsWith("xt_s_")
+    private fun localNativeIdentity(id: String) = nativePlaybackId(id) || externalMovieId(id) || id.startsWith("xt_s_") || identities.isExternalSource(id)
     private val identityChanges = combine(identities.entries, identities.externalRevision) { rows, _ -> rows }
-    private fun <T> observe(id: String, block: (Set<String>) -> Flow<T>): Flow<T> = flow {
+    private fun <T> observe(id: String, seriesHint: Boolean? = null, block: (Set<String>) -> Flow<T>): Flow<T> = flow {
         resolver.resolve(id)
-        emitAll(identityChanges.flatMapLatest { block(identities.related(id).flatMap { identities.externalRelated(it) }
-            .flatMap { identities.related(it) }.toSet()) })
+        emitAll(identityChanges.flatMapLatest { block(identities.related(id, seriesHint).flatMap { identities.externalRelated(it, seriesHint) }
+            .flatMap { identities.related(it, seriesHint) }.toSet()) })
     }.flowOn(Dispatchers.Default)
     private fun list(source: Flow<List<WatchProgress>>) = combine(source, identityChanges) { items, _ -> identities.project(items) }.flowOn(Dispatchers.Default)
     private fun latest(items: List<WatchProgress>) = identities.project(items).groupBy { it.contentId }
@@ -41,12 +42,15 @@ class SharedWatchProgressRepository @Inject constructor(
         items.flatMap { item ->
             val series = item.season != null || item.contentType in setOf("series", "tv", "anime")
             targets.getOrPut(item.contentId to series) {
-                identities.related(item.contentId, seriesHint = true.takeIf { series }).flatMap { identities.externalRelated(it) }
-                .flatMap { identities.related(it, seriesHint = true.takeIf { series }) }.toSet()
+                identities.related(item.contentId, seriesHint = series).flatMap { identities.externalRelated(it, series) }
+                .flatMap { identities.related(it, seriesHint = series) }.toSet()
             }
                 .mapNotNull { target -> identities.watched(item, target).takeIf { it.contentId == target } }
         }
     }.flowOn(Dispatchers.Default)
+    override fun getWatchedEpisodes(contentId: String): Flow<Set<Pair<Int, Int>>> =
+        watchedItems.map { items -> items.filter { it.contentId == contentId && it.season != null && it.episode != null }
+            .map { it.season!! to it.episode!! }.toSet() }.distinctUntilChanged().flowOn(Dispatchers.Default)
     override fun getProgress(contentId: String) = profiles.activeProfileId.flatMapLatest { getProgress(contentId, it) }
     override fun getProgress(contentId: String, profileId: Int): Flow<WatchProgress?> = observe(contentId) { ids ->
         val legacy = if (ids.size > 1) ids.filter(::localNativeIdentity).map { delegate.localIdentityProgress(it, null, null, profileId) } else emptyList()
@@ -61,15 +65,15 @@ class SharedWatchProgressRepository @Inject constructor(
     }
     override fun getEpisodeProgress(contentId: String, season: Int, episode: Int) =
         profiles.activeProfileId.flatMapLatest { getEpisodeProgress(contentId, season, episode, it) }
-    override fun getEpisodeProgress(contentId: String, season: Int, episode: Int, profileId: Int): Flow<WatchProgress?> = observe(contentId) { ids ->
+    override fun getEpisodeProgress(contentId: String, season: Int, episode: Int, profileId: Int): Flow<WatchProgress?> = observe(contentId, true) { ids ->
         val legacy = if (ids.size > 1) ids.filter(::localNativeIdentity).mapNotNull { target ->
             val query = identities.externalQuery(contentId, target, season, episode)
-            if (target.startsWith("xt_") && query == null) null
+            if ((target.startsWith("xt_") || identities.isExternalSource(target)) && query == null) null
             else delegate.localIdentityProgress(target, query?.first ?: season, query?.second ?: episode, profileId)
         } else emptyList()
         combine(ids.mapNotNull { target ->
             val query = identities.externalQuery(contentId, target, season, episode)
-            if (target != contentId && (contentId.startsWith("xt_") || target.startsWith("xt_") || identities.hasPartBinding(contentId) || identities.hasPartBinding(target)) && query == null) null
+            if (target != contentId && (contentId.startsWith("xt_") || target.startsWith("xt_") || identities.isExternalSource(contentId) || identities.isExternalSource(target) || identities.hasPartBinding(contentId) || identities.hasPartBinding(target)) && query == null) null
             else delegate.getEpisodeProgress(target, query?.first ?: season, query?.second ?: episode, profileId)
         } + legacy) { values ->
             values.filterNotNull().map { identities.progress(it, contentId) }
@@ -77,7 +81,7 @@ class SharedWatchProgressRepository @Inject constructor(
         }
     }
     override fun getAllEpisodeProgress(contentId: String) = profiles.activeProfileId.flatMapLatest { getAllEpisodeProgress(contentId, it) }
-    override fun getAllEpisodeProgress(contentId: String, profileId: Int): Flow<Map<Pair<Int, Int>, WatchProgress>> = observe(contentId) { ids ->
+    override fun getAllEpisodeProgress(contentId: String, profileId: Int): Flow<Map<Pair<Int, Int>, WatchProgress>> = observe(contentId, true) { ids ->
         val legacy = if (ids.size > 1) ids.filter(::localNativeIdentity).map { delegate.localIdentityEpisodes(it, profileId) } else emptyList()
         combine(ids.map { delegate.getAllEpisodeProgress(it, profileId) } + legacy) { maps ->
             maps.flatMap { it.values }.map { identities.progress(it, contentId) }
@@ -91,11 +95,11 @@ class SharedWatchProgressRepository @Inject constructor(
         val replaying = progress.filter { it.season == null && !it.isCompleted() && (it.position > 0 || (it.progressPercent ?: 0f) > 0) }.map { it.contentId }.toSet()
         identities.expand(ids).filterNot { identities.canonical(it) in replaying }.toSet()
     }.flowOn(Dispatchers.Default)
-    override fun isWatched(contentId: String, videoId: String?, season: Int?, episode: Int?): Flow<Boolean> = observe(contentId) { ids ->
+    override fun isWatched(contentId: String, videoId: String?, season: Int?, episode: Int?): Flow<Boolean> = observe(contentId, true.takeIf { season != null || episode != null }) { ids ->
         val allowed = ids.filter { identities.canProjectEpisode(contentId, it, season, episode) }
         val watched = combine(allowed.mapNotNull { target ->
             val query = if (season != null && episode != null) identities.externalQuery(contentId, target, season, episode) else null
-            if (target != contentId && (contentId.startsWith("xt_") || target.startsWith("xt_") || identities.hasPartBinding(contentId) || identities.hasPartBinding(target)) && query == null) null
+            if (target != contentId && (contentId.startsWith("xt_") || target.startsWith("xt_") || identities.isExternalSource(contentId) || identities.isExternalSource(target) || identities.hasPartBinding(contentId) || identities.hasPartBinding(target)) && query == null) null
             else delegate.isWatched(target, if (target == contentId) videoId else null, query?.first ?: season, query?.second ?: episode)
         }) { it.any { value -> value } }
         val progress = if (season != null && episode != null) getEpisodeProgress(contentId, season, episode) else getProgress(contentId)
@@ -146,6 +150,7 @@ class SharedWatchProgressRepository @Inject constructor(
         aliases.filter { it.contentId != canonical.contentId }.forEach {
             delegate.removeLocalIdentityAlias(it.contentId, it.season, it.episode, true, profile)
         }
+        seriesState?.invalidateCompleted((aliases.map { it.contentId } + canonical.contentId).toSet(), profile)
     }
     override suspend fun removeFromHistoryBatch(contentId: String, videoId: String?, episodes: List<Triple<Int, Int, String?>>) {
         val profile = profiles.activeProfileId.value
@@ -167,17 +172,18 @@ class SharedWatchProgressRepository @Inject constructor(
                 .distinctBy { Triple(it.contentId, it.season, it.episode) }) {
                 delegate.removeLocalIdentityAlias(alias.contentId, alias.season, alias.episode, true, profile)
             }
+            seriesState?.invalidateCompleted((items.flatMap { it.second.second }.map { it.contentId } + target).toSet(), profile)
         }
     }
 
     /** Resolve both the work and coordinates for writes, exactly as for displayed watched flags. */
     private fun historyProjection(id: String, season: Int?, episode: Int?): Pair<WatchedItem, List<WatchedItem>> {
         val row = identities.entries.value.firstOrNull { it.native == id }
-        val series = season != null || episode != null || row?.series == true || id.startsWith("xt_s_") ||
+        val series = season != null || episode != null || row?.series == true || id.startsWith("xt_s_") || identities.isExternalSeries(id) ||
             id.startsWith("tmdb:tv:") || id.startsWith("tmdb:series:")
         val item = WatchedItem(id, if (series) "series" else "movie", "", season, episode, 0)
         if (row?.partial == true && (season == null || episode == null)) return item to listOf(item)
-        val aliases = identities.related(id, series).flatMap { identities.externalRelated(it) }
+        val aliases = identities.related(id, series).flatMap { identities.externalRelated(it, series) }
             .flatMap { identities.related(it, series) }.toSet().mapNotNull { target ->
                 identities.watched(item, target).takeIf { it.contentId == target }
             }
@@ -191,7 +197,7 @@ class SharedWatchProgressRepository @Inject constructor(
     override suspend fun getWatchedShowEpisodes(): Map<String, Set<Pair<Int, Int>>> {
         val result = mutableMapOf<String, Set<Pair<Int, Int>>>()
         delegate.getWatchedShowEpisodes().forEach { (id, episodes) ->
-            identities.related(id).flatMap { identities.externalRelated(it) }.flatMap { identities.related(it) }.toSet().forEach { alias ->
+            identities.related(id, true).flatMap { identities.externalRelated(it, true) }.flatMap { identities.related(it, true) }.toSet().forEach { alias ->
                 val compatible = episodes.mapNotNull { (s, e) ->
                     val mapped = identities.watched(WatchedItem(id, "series", "", s, e, 0), alias)
                     if (mapped.contentId == alias && mapped.season != null && mapped.episode != null) mapped.season to mapped.episode else null

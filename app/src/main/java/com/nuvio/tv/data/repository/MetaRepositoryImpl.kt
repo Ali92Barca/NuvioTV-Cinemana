@@ -236,8 +236,8 @@ class MetaRepositoryImpl @Inject constructor(
                 com.nuvio.tv.data.cinemana.CinemanaAddonApi.BASE_URL,
                 com.nuvio.tv.data.cee.CeeAddonApi.BASE_URL
             )) builtinDetails?.snapshotKey(requestedType, id) else null
-        val deferred = inFlightMeta.getOrPut(cacheKey) {
-            repositoryScope.async {
+        val deferred = inFlightMeta.sharedRequest(cacheKey) {
+            repositoryScope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) {
                 try {
                     val response = api.getMeta(url)
                     if (response.isSuccessful) {
@@ -427,8 +427,8 @@ class MetaRepositoryImpl @Inject constructor(
             return@flow
         }
 
-        val deferred = inFlightAddonMeta.getOrPut(cacheKey) {
-            repositoryScope.async {
+        val deferred = inFlightAddonMeta.sharedRequest(cacheKey) {
+            repositoryScope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) {
                 try {
                     // Kept here rather than in the enclosing flow's lists: this
                     // Deferred is shared, so only its creator would see those, and
@@ -565,8 +565,8 @@ class MetaRepositoryImpl @Inject constructor(
             "Trying primary meta addonId=${addon.id} addonName=${addon.name} type=$candidateType id=$id url=$url"
         )
 
-        val deferred = inFlightPrimaryMeta.getOrPut(cacheKey) {
-            repositoryScope.async {
+        val deferred = inFlightPrimaryMeta.sharedRequest(cacheKey) {
+            repositoryScope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) {
                 try {
                     val response = api.getMeta(url)
                     if (response.isSuccessful) {

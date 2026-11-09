@@ -40,12 +40,16 @@ class WatchedSeriesStateHolder @Inject constructor(
         private val KEY = stringSetPreferencesKey("fully_watched_ids")
         private val REVALIDATE_KEY = stringPreferencesKey("revalidate_after")
         private val VALIDATION_RESET_KEY = intPreferencesKey("validation_reset_version")
-        private const val VALIDATION_RESET_VERSION = 1
+        private const val VALIDATION_RESET_VERSION = 2
         private const val DEFAULT_TTL_MS = 7L * 24 * 60 * 60 * 1000 // 7 days
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val gson = Gson()
+    private val writeVersions = java.util.concurrent.ConcurrentHashMap<Int, java.util.concurrent.atomic.AtomicLong>()
+    private fun nextWrite(profileId: Int) = writeVersions.getOrPut(profileId) {
+        java.util.concurrent.atomic.AtomicLong()
+    }.incrementAndGet()
     private val _fullyWatchedSeriesIds = MutableStateFlow<Set<String>>(emptySet())
     val fullyWatchedSeriesIds: StateFlow<Set<String>> = _fullyWatchedSeriesIds.asStateFlow()
 
@@ -68,11 +72,16 @@ class WatchedSeriesStateHolder @Inject constructor(
         // Ids still in memory belong to the previously loaded profile.
         val switchingProfile = loadedForProfileId != null
         val prefs = store(profileId).data.first()
-        val persisted = prefs[KEY] ?: emptySet()
+        var persisted = prefs[KEY] ?: emptySet()
         val resetVersion = prefs[VALIDATION_RESET_KEY] ?: 0
         if (resetVersion < VALIDATION_RESET_VERSION) {
+            // Old completion badges were derived from provider-local reads. They
+            // cannot be trusted after switching to shared episode history. Only
+            // discard this derived cache; actual progress/marks are separate stores.
+            persisted = emptySet()
             revalidateAfterMap = emptyMap()
             store(profileId).edit { p ->
+                p.remove(KEY)
                 p.remove(REVALIDATE_KEY)
                 p[VALIDATION_RESET_KEY] = VALIDATION_RESET_VERSION
             }
@@ -90,8 +99,27 @@ class WatchedSeriesStateHolder @Inject constructor(
         val normalized = identities.expand(ids) - removed
         _fullyWatchedSeriesIds.value = normalized
         val profileId = profileManager.activeProfileId.value
+        val version = nextWrite(profileId)
         scope.launch {
-            store(profileId).edit { prefs -> prefs[KEY] = normalized }
+            store(profileId).edit { prefs -> if (writeVersions[profileId]?.get() == version) prefs[KEY] = normalized }
+        }
+    }
+
+    /** Exact affected identities supplied by the shared episode mutation, not a whole
+     * work expansion: an IPTV-only extra episode must not invalidate another cut. */
+    suspend fun invalidateCompleted(ids: Set<String>, profileId: Int) {
+        if (ids.isEmpty()) return
+        val version = nextWrite(profileId)
+        if (loadedForProfileId == profileId ||
+            (loadedForProfileId == null && profileManager.activeProfileId.value == profileId)) {
+            _fullyWatchedSeriesIds.value = _fullyWatchedSeriesIds.value - ids
+            revalidateAfterMap = revalidateAfterMap - ids
+        }
+        store(profileId).edit { prefs ->
+            if (writeVersions[profileId]?.get() == version) {
+                prefs[KEY] = (prefs[KEY] ?: emptySet()) - ids
+                prefs[REVALIDATE_KEY] = gson.toJson(parseTimestamps(prefs[REVALIDATE_KEY]) - ids)
+            }
         }
     }
 
@@ -138,10 +166,13 @@ class WatchedSeriesStateHolder @Inject constructor(
 
         revalidateAfterMap = updated
         if (idsChanged || deadlinesChanged) {
+            val version = nextWrite(profileId)
             scope.launch {
                 store(profileId).edit { prefs ->
-                    prefs[KEY] = ids
-                    prefs[REVALIDATE_KEY] = gson.toJson(updated)
+                    if (writeVersions[profileId]?.get() == version) {
+                        prefs[KEY] = ids
+                        prefs[REVALIDATE_KEY] = gson.toJson(updated)
+                    }
                 }
             }
         }

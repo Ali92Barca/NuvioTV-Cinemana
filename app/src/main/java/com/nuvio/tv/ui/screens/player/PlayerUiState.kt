@@ -253,6 +253,13 @@ data class PlayerUiState(
     val hideTorrentStats: Boolean = true,
     val isLive: Boolean = false
 ) {
+    /** Rendering only; source coordinates above continue to drive playback/actions. */
+    private val displayedEpisode by lazy {
+        episodesAll.firstOrNull { it.id == currentVideoId } ?: episodes.firstOrNull { it.id == currentVideoId }
+    }
+    val displaySeason: Int? get() = displayedEpisode?.displaySeason ?: currentSeason
+    val displayEpisode: Int? get() = displayedEpisode?.displayEpisode ?: currentEpisode
+    val displayEpisodeTitle: String? get() = displayedEpisode?.displayTitle ?: currentEpisodeTitle
     /** Subtitle style to render with, after applying the HDR override for the current video. */
     val effectiveSubtitleStyle: SubtitleStyleSettings
         get() = subtitleStyle.forVideo(isHdrVideo)

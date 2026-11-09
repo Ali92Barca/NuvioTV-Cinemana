@@ -11,6 +11,64 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SharedPlaybackIdentityTest {
+    @Test fun `addon reusing one opaque ID for movie and series cannot join their watched graphs`() {
+        val native="custom:42"
+        registry.learnExternalEpisode("https://addon.test",native,"custom:episode:1",1,1,"tt1234",1,1)
+        registry.learnExternalMovie("https://addon.test",native,"456","tt5678")
+        assertEquals(setOf(native),registry.externalRelated(native))
+        assertTrue("tt1234" in registry.externalRelated(native,true))
+        assertFalse("tt5678" in registry.externalRelated(native,true))
+        assertTrue("tt5678" in registry.externalRelated(native,false))
+        assertFalse("tt1234" in registry.externalRelated(native,false))
+    }
+    @Test fun `opaque addon playback identifiers share verified watch identity without Xtream prefixes`() {
+        val native = "custom:addon:series:42"
+        registry.learnExternalSeason("https://addon.test/config",native,"tt1234",1,1,
+            listOf(Triple(21,"custom:episode:821",1)))
+        val source = progress(native,series=true).copy(episode=21,videoId="custom:episode:821",addonBaseUrl="https://addon.test/config")
+        val shared = registry.progress(source)
+        assertEquals("tt1234",shared.contentId)
+        assertEquals(1,shared.episode)
+        assertEquals("custom:episode:821",registry.progress(shared,native).videoId)
+        registry.learnExternalMovie("https://addon.test/config","custom:movie:72","123", "tt7777")
+        assertEquals("tt7777",registry.progress(progress("custom:movie:72").copy(addonBaseUrl="https://addon.test/config")).contentId)
+        assertEquals("custom:movie:72",registry.progress(progress("tt7777"),"custom:movie:72").contentId)
+    }
+    @Test fun `ABI cumulative playback projects through the public identity to Cinemana and CEE`() {
+        val base = meta("cinemana-series:1355387", "306529", true, true)
+        val videos = (1..5).map { base.videos.first().copy(id = "cinemana:${1355438 + it * 3}", season = 2, episode = it) }
+        registry.learn(base.copy(videos = videos), "tt38282411")
+        registry.learn(base.copy(id = "cee:1355387", videos = videos.map { it.copy(id = "cee:${it.episode}") }), "tt38282411")
+        val native = "xt_s_src_41951"
+        registry.learnExternalSeason("https://source.test", native, "tt38282411", 2, 2,
+            (1..5).map { Triple(it+18,"$native:2:${it+18}",it) })
+        val public = progress("tt38282411", 20, true).copy(season = 2, episode = 2, videoId = "tt38282411:2:2")
+        assertEquals("cinemana:1355444", registry.progress(public, base.id).videoId)
+        assertEquals(base.id, registry.progress(public, base.id).contentId)
+        assertEquals("cee:1355387", registry.progress(public, "cee:1355387").contentId)
+        val playback = registry.progress(public, native)
+        assertEquals(20, playback.episode)
+        assertEquals("$native:2:20", playback.videoId)
+        assertEquals(2, registry.progress(playback, base.id).episode)
+        val mark = WatchedItem(native, "series", "ABI", 2, 20, 20)
+        assertEquals(2, registry.watched(mark, base.id).episode)
+        val raw = base.videos.first().copy(id = "$native:2:20", season = 2, episode = 20, title = "AR-TR-S ABI - S02E20")
+        val decorated = registry.withWatchIdentity(base.copy(id = native, videos = listOf(raw)), "https://source.test").videos.single()
+        assertEquals(2, decorated.displayEpisode)
+        assertEquals("AR-TR-S ABI - S02E02", decorated.displayTitle)
+        assertEquals(20, decorated.episode)
+        assertEquals(raw.id, decorated.id)
+    }
+    @Test fun `manual watched aliases project without requiring a progress record and extras stay isolated`() {
+        val base = meta("cinemana-series:3136286", "256440", true, true)
+        registry.learn(base.copy(videos = (1..8).map { base.videos.first().copy(id = "cinemana:$it", episode = it) }), "tt45382417")
+        val native = "xt_s_src_50302"
+        registry.learnExternalSeason("https://source.test", native, "tt45382417", 1, 1,
+            (1..8).map { Triple(it,"$native:1:$it",it) })
+        assertEquals(base.id, registry.watched(WatchedItem(native,"series","Alikara",1,7,20),base.id).contentId)
+        assertEquals(native, registry.watched(WatchedItem("tt45382417","series","Alikara",1,7,20),native).contentId)
+        assertEquals(native, registry.watched(WatchedItem(native,"series","Alikara",1,9,20),base.id).contentId)
+    }
     @Test fun `future Cinemana episode reuses earlier IPTV watched progress without remarking`() {
         val original = meta("cinemana-series:7", series = true, safe = true)
         fun provider(count: Int) = original.copy(videos = (1..count).map {
@@ -382,17 +440,43 @@ class SharedPlaybackIdentityTest {
         assertFalse(verifiedEpisodeCoordinates(emptyList(), official))
     }
     private fun repository(delegate: WatchProgressRepositoryImpl, identities: SharedPlaybackIdentity = registry,
-        watched: List<WatchedItem> = emptyList(), activeProfile: MutableStateFlow<Int> = MutableStateFlow(1)): SharedWatchProgressRepository {
+        watched: List<WatchedItem> = emptyList(), activeProfile: MutableStateFlow<Int> = MutableStateFlow(1),
+        watchedFlow: Flow<List<WatchedItem>> = flowOf(watched),
+        seriesState: com.nuvio.tv.data.local.WatchedSeriesStateHolder? = null): SharedWatchProgressRepository {
         every { delegate.allProgress } returns flowOf(emptyList())
         every { delegate.continueWatching } returns flowOf(emptyList())
-        every { delegate.watchedItems } returns flowOf(watched)
+        every { delegate.watchedItems } returns watchedFlow
         every { delegate.localIdentityProgress(any(), any(), any(), any()) } returns flowOf(null)
         every { delegate.localIdentityEpisodes(any(), any()) } returns flowOf(emptyMap())
         val resolver = mockk<SharedPlaybackResolver> {
             coEvery { resolve(any()) } coAnswers { registry.canonical(firstArg()) }
         }
         val profiles = mockk<ProfileManager> { every { activeProfileId } returns activeProfile }
-        return SharedWatchProgressRepository(delegate, identities, resolver, profiles)
+        return SharedWatchProgressRepository(delegate, identities, resolver, profiles, seriesState)
+    }
+    @Test fun `shared watched read emits manual aliases and their removal without any progress`() = kotlinx.coroutines.runBlocking {
+        val native = "xt_s_src_50302"
+        registry.learn(meta("cinemana-series:7",series=true,safe=true),"tt1234")
+        registry.learnExternalEpisode("https://example.test",native,"$native:1:1",1,1,"tt1234",1,1)
+        val feed = MutableStateFlow(listOf(WatchedItem(native,"series","Show",1,1,1)))
+        val repo = repository(mockk(relaxed=true),watchedFlow=feed)
+        assertEquals(setOf(1 to 1),repo.getWatchedEpisodes("cinemana-series:7").first())
+        assertEquals(setOf(1 to 1),repo.getWatchedEpisodes("tt1234").first())
+        feed.value=emptyList()
+        assertEquals(emptySet<Pair<Int,Int>>(),repo.getWatchedEpisodes("cinemana-series:7").first())
+        assertEquals(emptySet<Pair<Int,Int>>(),repo.getWatchedEpisodes(native).first())
+    }
+    @Test fun `unwatch invalidates related catalog badges but an unmapped extra does not`() = runTest {
+        val native = "xt_s_src_50302"
+        registry.learn(meta("cinemana-series:7",series=true,safe=true),"tt1234")
+        registry.learnExternalEpisode("https://example.test",native,"$native:1:1",1,1,"tt1234",1,1)
+        val holder = mockk<com.nuvio.tv.data.local.WatchedSeriesStateHolder>(relaxed=true)
+        val repo = repository(mockk(relaxed=true),seriesState=holder)
+        repo.removeFromHistory(native,"$native:1:1",1,1)
+        coVerify { holder.invalidateCompleted(match { native in it && "cinemana-series:7" in it && "tt1234" in it },1) }
+        clearMocks(holder,answers=false)
+        repo.removeFromHistory(native,"$native:1:9",1,9)
+        coVerify { holder.invalidateCompleted(setOf(native),1) }
     }
     @Test fun `large watched history projects off collector thread and resolves each title only once`() = kotlinx.coroutines.runBlocking {
         val collector = Thread.currentThread()
@@ -400,7 +484,7 @@ class SharedPlaybackIdentityTest {
         registry.learnExternalSeason("https://example.test", native, "tt1234", 1, 1,
             (1..100).map { Triple(it, "$native:1:$it", it) })
         val tracked = spyk(registry)
-        every { tracked.externalRelated(any()) } answers {
+        every { tracked.externalRelated(any(), any()) } answers {
             assertNotSame(collector, Thread.currentThread())
             callOriginal()
         }
@@ -409,7 +493,7 @@ class SharedPlaybackIdentityTest {
         val result = kotlinx.coroutines.withTimeout(10_000) { repo.watchedItems.first() }
         assertEquals(200, result.size)
         assertTrue(result.any { it.contentId == native && it.episode == 100 })
-        verify(exactly = 1) { tracked.externalRelated("tt1234") }
+        verify(exactly = 1) { tracked.externalRelated("tt1234",true) }
     }
 
     @Test fun `cached title relationships refresh after a new part and revoked season`() {

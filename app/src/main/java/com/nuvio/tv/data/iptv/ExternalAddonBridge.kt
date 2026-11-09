@@ -82,7 +82,7 @@ class ExternalAddonBridge @Inject constructor(
     /** One bounded metadata-only stream lookup, only when relaxed mapping is needed.
      * No media is played and no subscription URL is stored in the proof cache. */
     internal suspend fun translatedEdition(addon: Addon, native: Meta): Boolean {
-        if (!isXtream(addon)) return false
+        if (!com.nuvio.tv.data.repository.privateAddonId(native.id)) return false
         if (translatedLabel((listOf(native.name) + native.genres).joinToString(" "))) return true
         val sample = native.videos.filter { (it.season ?: 0) > 0 && (it.episode ?: 0) > 0 }
             .minWithOrNull(compareBy<Video> { it.season }.thenBy { it.episode }) ?: return false
@@ -242,7 +242,7 @@ class ExternalAddonBridge @Inject constructor(
                     rows.mapNotNull(::candidate).distinct(), info.imdbId, info.tmdbId)
                     as? ExternalAddonTitleMatcher.Decision.Matched
                 if (match == null) emptyList() else {
-                    if (isXtream(addon)) identities?.learnExternalMovie(addon.baseUrl, match.candidate.originalId, info.tmdbId, info.imdbId)
+                    if (com.nuvio.tv.data.repository.privateAddonId(match.candidate.originalId)) identities?.learnExternalMovie(addon.baseUrl, match.candidate.originalId, info.tmdbId, info.imdbId)
                     if (accepted.add(match.candidate.originalId)) onResolved?.invoke(match.candidate.originalId)
                     accepted.toList()
                 }
@@ -266,12 +266,16 @@ class ExternalAddonBridge @Inject constructor(
 
     /** Learn the inverse direction when a user opens an Xtream catalog title directly. */
     suspend fun enrichNative(addon: Addon, native: Meta): Meta = withContext(Dispatchers.IO) {
-        if (!isXtream(addon) || !native.id.startsWith("xt_")) return@withContext native
+        val publicEvidence = native.tmdbId?.toIntOrNull()?.let { it > 0 } == true || native.imdbId?.matches(Regex("tt[0-9]+")) == true
+        if (!com.nuvio.tv.data.repository.privateAddonId(native.id) ||
+            (!(isXtream(addon) && native.id.startsWith("xt_")) && !publicEvidence))
+            return@withContext identities?.withWatchIdentity(native, addon.baseUrl) ?: native
         val key = hash(addon.baseUrl + "\u0000" + addon.version + "\u0000" + native.id)
         val cached = synchronized(nativeEnrichments) { nativeEnrichments[key] }
         if (cached != null && cached.source == native && cached.layoutRevision == identities?.entries?.value.hashCode() && System.nanoTime() - cached.created < 300_000_000_000L)
             return@withContext cached.result
-        val result = if (native.apiType == "movie") enrichNativeMovie(addon, native) else enrichNativeSeries(addon, native)
+        val enriched = if (native.apiType == "movie") enrichNativeMovie(addon, native) else enrichNativeSeries(addon, native)
+        val result = if (enriched.videos.isNotEmpty()) identities?.withWatchIdentity(enriched, addon.baseUrl) ?: enriched else enriched
         if (result.sharedProgressCompatible) synchronized(nativeEnrichments) {
             nativeEnrichments[key] = NativeEnrichment(System.nanoTime(), native, result, identities?.entries?.value.hashCode())
         }
@@ -280,7 +284,7 @@ class ExternalAddonBridge @Inject constructor(
 
     private suspend fun enrichNativeMovie(addon: Addon, native: Meta): Meta {
         val api = tmdb ?: return native
-        if (identities == null || !com.nuvio.tv.data.repository.externalMovieId(native.id) || BuildConfig.TMDB_API_KEY.isBlank()) return native
+        if (identities == null || !com.nuvio.tv.data.repository.privateAddonId(native.id) || BuildConfig.TMDB_API_KEY.isBlank()) return native
         return withTimeoutOrNull(12_000) {
             try {
                 val sourceYear = year(native.releaseInfo ?: native.released)
@@ -304,8 +308,8 @@ class ExternalAddonBridge @Inject constructor(
 
     private suspend fun enrichNativeSeries(addon: Addon, native: Meta): Meta {
         val api = tmdb ?: return native
-        if (identities == null || !isXtream(addon) || native.apiType != "series" ||
-            !Regex("xt_s_[A-Za-z0-9]+_[0-9]+").matches(native.id) || BuildConfig.TMDB_API_KEY.isBlank()) return native
+        if (identities == null || native.apiType != "series" ||
+            !com.nuvio.tv.data.repository.privateAddonId(native.id) || BuildConfig.TMDB_API_KEY.isBlank()) return native
         return withTimeoutOrNull(25_000) {
             try {
                 val labels = ExternalAddonTitleMatcher.titleVariants(native.name).toList()

@@ -4,6 +4,8 @@ import com.nuvio.tv.domain.model.WatchProgress
 import com.nuvio.tv.domain.model.WatchedItem
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
  * Repository for managing watch progress data.
@@ -22,6 +24,12 @@ interface WatchProgressRepository {
 
     val watchedItems: Flow<List<WatchedItem>>
         get() = flowOf(emptyList())
+
+    /** Provider-neutral watched coordinates; views must not read raw provider stores. */
+    fun getWatchedEpisodes(contentId: String): Flow<Set<Pair<Int, Int>>> = watchedItems.map { items ->
+        items.filter { it.contentId == contentId && it.season != null && it.episode != null }
+            .map { it.season!! to it.episode!! }.toSet()
+    }.distinctUntilChanged()
     
     /**
      * Get watch progress for a specific content item (movie or series)

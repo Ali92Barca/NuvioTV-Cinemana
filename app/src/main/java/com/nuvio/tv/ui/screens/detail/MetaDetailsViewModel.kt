@@ -38,7 +38,6 @@ import com.nuvio.tv.domain.model.WatchProgress
 import com.nuvio.tv.domain.repository.LibraryRepository
 import com.nuvio.tv.domain.repository.MetaRepository
 import com.nuvio.tv.domain.repository.WatchProgressRepository
-import com.nuvio.tv.data.local.WatchedItemsPreferences
 import com.nuvio.tv.data.local.TrailerSettingsDataStore
 import com.nuvio.tv.data.mediaserver.ServerItemRef
 import com.nuvio.tv.data.trailer.TrailerService
@@ -94,7 +93,6 @@ class MetaDetailsViewModel @Inject constructor(
     private val mdbListSettingsDataStore: MDBListSettingsDataStore,
     private val libraryRepository: LibraryRepository,
     private val watchProgressRepository: WatchProgressRepository,
-    private val watchedItemsPreferences: WatchedItemsPreferences,
     private val trailerService: TrailerService,
     private val trailerSettingsDataStore: TrailerSettingsDataStore,
     private val traktAuthDataStore: TraktAuthDataStore,
@@ -538,7 +536,6 @@ class MetaDetailsViewModel @Inject constructor(
                         state.copy(episodeProgressMap = progressMap)
                     }
                 }
-                revalidateLocalWatchedEpisodesAgainstActiveProvider(progressMap)
                 // Recalculate next to watch when progress changes
                 reevaluateSeriesWatchedBadge()
                 calculateNextToWatch()
@@ -557,49 +554,12 @@ class MetaDetailsViewModel @Inject constructor(
         }
     }
 
-    private fun revalidateLocalWatchedEpisodesAgainstActiveProvider(
-        providerProgressMap: Map<Pair<Int, Int>, WatchProgress>
-    ) {
-        if (itemType.equals("other", ignoreCase = true)) return
-        if (itemType.equals("movie", ignoreCase = true)) return
-        if (providerProgressMap.isEmpty()) return
-        val hasCompletedEntries = providerProgressMap.values.any { it.isCompleted() }
-        if (!hasCompletedEntries) return
-        val profileId = profileManager.activeProfileId.value
-
-        viewModelScope.launch(Dispatchers.IO) {
-            if (!watchProgressRepository.activeProviderOwnsCompletedHistoryProjection()) return@launch
-            if (profileManager.activeProfileId.value != profileId) return@launch
-
-            val contentId = _effectiveContentId.value
-            val localWatched = watchedItemsPreferences
-                .getWatchedEpisodesForContent(contentId, profileId)
-                .first()
-            if (profileManager.activeProfileId.value != profileId) return@launch
-            if (localWatched.isEmpty()) return@launch
-
-            val staleEpisodes = localWatched.filter { (season, episode) ->
-                val providerEntry = providerProgressMap[season to episode]
-                providerEntry == null || !providerEntry.isCompleted()
-            }
-
-            if (staleEpisodes.isNotEmpty()) {
-                Log.d(TAG, "revalidateWatchedEpisodes: pruning ${staleEpisodes.size} stale entries for $contentId")
-                watchedItemsPreferences.unmarkAsWatchedBatch(
-                    contentId = contentId,
-                    episodes = staleEpisodes.toList(),
-                    profileId = profileId
-                )
-            }
-        }
-    }
-
     private fun observeWatchedEpisodes() {
         if (itemType.lowercase() == "movie") return
         viewModelScope.launch {
             _effectiveContentId.flatMapLatest { cid ->
                 combine(
-                    watchedItemsPreferences.getWatchedEpisodesForContent(cid),
+                    watchProgressRepository.getWatchedEpisodes(cid),
                     watchProgressRepository.getAllEpisodeProgress(cid),
                     _uiState.map { it.meta?.videos }.distinctUntilChanged(),
                 ) { localWatched, progressMap, videos ->
@@ -619,7 +579,9 @@ class MetaDetailsViewModel @Inject constructor(
                             completedByProgress = key in fromProgress,
                             optimisticallyMarked = key in _optimisticMarks,
                             optimisticallyUnmarked = key in _optimisticUnmarks,
-                            watchedByVideoId = watchedByVideoId
+                            watchedByVideoId = watchedByVideoId,
+                            projectedWatched = key in localWatched &&
+                                (progressMap[key]?.let { it.isCompleted() || it.position <= 0L } != false)
                         )
                         if (isWatched) merged += key else merged -= key
                     }
@@ -1138,7 +1100,7 @@ class MetaDetailsViewModel @Inject constructor(
             } ?: flow.first()
         }
         val watchedDeferred = viewModelScope.async {
-            watchedItemsPreferences.getWatchedEpisodesForContent(contentId).first()
+            watchProgressRepository.getWatchedEpisodes(contentId).first()
         }
         val progressMap = progressDeferred.await()
         val watchedEpisodes = watchedDeferred.await()
@@ -2080,9 +2042,10 @@ class MetaDetailsViewModel @Inject constructor(
         val effectiveLatestProgress = latestSeriesProgress ?: run {
             if (watchedEpisodes.isEmpty()) null
             else {
-                val watchedWithTimestamps = watchedItemsPreferences
-                    .getWatchedEpisodesWithTimestamps(_effectiveContentId.value)
-                    .first()
+                val watchedWithTimestamps = withContext(Dispatchers.Default) { watchProgressRepository.watchedItems.first()
+                    .filter { it.contentId == _effectiveContentId.value && it.season != null && it.episode != null }
+                    .groupBy { it.season!! to it.episode!! }
+                    .mapValues { (_, items) -> items.maxOf { it.watchedAt } } }
                 val highest = watchedWithTimestamps.entries
                     .maxWithOrNull(compareBy<Map.Entry<Pair<Int, Int>, Long>> { it.value }
                         .thenBy { it.key.first }
@@ -2161,7 +2124,7 @@ class MetaDetailsViewModel @Inject constructor(
                     nextVideoId = matchedEpisode?.id ?: anchoredProgress.videoId,
                     nextSeason = season,
                     nextEpisode = episode,
-                    displayText = localizedContext.getString(R.string.detail_btn_resume_episode, season, episode)
+                    displayText = localizedContext.getString(R.string.detail_btn_resume_episode, matchedEpisode?.displaySeason ?: season, matchedEpisode?.displayEpisode ?: episode)
                 )
             }
 
@@ -2176,7 +2139,7 @@ class MetaDetailsViewModel @Inject constructor(
                             nextVideoId = next.id,
                             nextSeason = next.season,
                             nextEpisode = next.episode,
-                            displayText = localizedContext.getString(R.string.detail_btn_next_episode, next.season, next.episode)
+                            displayText = localizedContext.getString(R.string.detail_btn_next_episode, next.displaySeason, next.displayEpisode)
                         )
                     }
                 } else {
@@ -2196,7 +2159,7 @@ class MetaDetailsViewModel @Inject constructor(
                             nextVideoId = nextUnwatched.id,
                             nextSeason = nextUnwatched.season,
                             nextEpisode = nextUnwatched.episode,
-                            displayText = localizedContext.getString(R.string.detail_btn_next_episode, nextUnwatched.season, nextUnwatched.episode)
+                            displayText = localizedContext.getString(R.string.detail_btn_next_episode, nextUnwatched.displaySeason, nextUnwatched.displayEpisode)
                         )
                     }
                 }
@@ -2244,7 +2207,7 @@ class MetaDetailsViewModel @Inject constructor(
                     nextVideoId = resumeEpisode.id,
                     nextSeason = resumeEpisode.season,
                     nextEpisode = resumeEpisode.episode,
-                    displayText = localizedContext.getString(R.string.detail_btn_resume_episode, resumeEpisode.season, resumeEpisode.episode)
+                    displayText = localizedContext.getString(R.string.detail_btn_resume_episode, resumeEpisode.displaySeason, resumeEpisode.displayEpisode)
                 )
             }
             nextUnwatchedEpisode != null -> {
@@ -2259,9 +2222,9 @@ class MetaDetailsViewModel @Inject constructor(
                     nextSeason = s,
                     nextEpisode = e,
                     displayText = if (hasWatchedSomething) {
-                        localizedContext.getString(R.string.detail_btn_next_episode, s, e)
+                        localizedContext.getString(R.string.detail_btn_next_episode, preferredEpisode.displaySeason ?: s, preferredEpisode.displayEpisode ?: e)
                     } else {
-                        localizedContext.getString(R.string.detail_btn_play_episode, s, e)
+                        localizedContext.getString(R.string.detail_btn_play_episode, preferredEpisode.displaySeason ?: s, preferredEpisode.displayEpisode ?: e)
                     }
                 )
             }
@@ -2274,7 +2237,7 @@ class MetaDetailsViewModel @Inject constructor(
                     nextSeason = firstEpisode?.season,
                     nextEpisode = firstEpisode?.episode,
                     displayText = if (firstEpisode != null) {
-                        localizedContext.getString(R.string.detail_btn_play_episode, firstEpisode.season, firstEpisode.episode)
+                        localizedContext.getString(R.string.detail_btn_play_episode, firstEpisode.displaySeason, firstEpisode.displayEpisode)
                     } else {
                         localizedContext.getString(R.string.detail_btn_play)
                     }

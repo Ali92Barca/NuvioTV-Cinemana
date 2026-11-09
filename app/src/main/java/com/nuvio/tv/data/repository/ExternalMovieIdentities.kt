@@ -4,6 +4,9 @@ import com.nuvio.tv.domain.model.WatchProgress
 
 private val movieIdPattern = Regex("xt_(?:v|m|vod)_[A-Za-z0-9]+_[0-9]+")
 internal fun externalMovieId(id: String) = movieIdPattern.matches(id)
+/** Opaque addon IDs are playback references, never public work identities or URLs. */
+internal fun privateAddonId(id: String) = Regex("[A-Za-z0-9_:.-]{1,200}").matches(id) &&
+    !Regex("tt[0-9]+|tmdb:.*").matches(id) && !nativePlaybackId(id)
 
 /** Subscription scope contains a hash only. Native playback IDs are never rewritten in metadata. */
 internal data class ExternalMovieIdentity(val scope: String, val native: String, val tmdb: String?, val imdb: String?) {
@@ -34,8 +37,9 @@ internal class ExternalMovieIdentities(val rows: List<ExternalMovieIdentity>) {
     }
     private val public = groups.flatMap { g -> g.aliases.map { it to g } }.toMap()
     private val native = groups.flatMap { g -> g.rows.map { it.native to g } }.groupBy({ it.first }, { it.second })
+    fun isNative(id: String) = native.containsKey(id)
     private fun select(id: String, scope: String? = null): Group? =
-        (if (externalMovieId(id)) native[id].orEmpty().distinct().filter { g -> scope == null || g.rows.any { it.native == id && it.scope == scope } }.singleOrNull()
+        (if (isNative(id)) native[id].orEmpty().distinct().filter { g -> scope == null || g.rows.any { it.native == id && it.scope == scope } }.singleOrNull()
         else public[id])?.takeIf { it.valid }
 
     fun related(id: String): Set<String> {

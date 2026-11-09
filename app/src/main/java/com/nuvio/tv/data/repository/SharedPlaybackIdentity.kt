@@ -53,7 +53,7 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     }.getOrDefault(emptyList()))
 
     @Synchronized internal fun learnExternalMovie(baseUrl: String, native: String, tmdb: String?, imdb: String?) {
-        if (baseUrl.isBlank() || !externalMovieId(native)) return
+        if (baseUrl.isBlank() || !privateAddonId(native)) return
         val tmdbId = tmdb?.takeIf { it.toIntOrNull()?.let { n -> n > 0 } == true }
         val imdbId = imdb?.takeIf { Regex("tt[0-9]+").matches(it) }
         if (tmdbId == null && imdbId == null) return
@@ -135,12 +135,12 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     @Synchronized internal fun learnExternalSeason(baseUrl: String, native: String, canonical: String,
         nativeSeason: Int, canonicalSeason: Int, videos: List<Triple<Int, String, Int>>,
         allowPartAlias: Boolean = false, canonicalVideos: Map<Int, String> = emptyMap()) {
-        if (!Regex("xt_s_[A-Za-z0-9]+_[0-9]+").matches(native) || baseUrl.isBlank() ||
+        if (!privateAddonId(native) || baseUrl.isBlank() ||
             !Regex("tt[0-9]+|tmdb:(?:tv:|series:)?[0-9]+|cinemana-series:[0-9]+|cee:[0-9]+").matches(canonical)) return
         val scope = sourceScope(baseUrl)
         var changed = false
         for ((nativeEpisode, nativeVideo, canonicalEpisode) in videos) {
-        if (!Regex("xt_[A-Za-z0-9_:.-]+").matches(nativeVideo)) continue
+        if (!Regex("[A-Za-z0-9_:.-]{1,250}").matches(nativeVideo)) continue
         val row = ExternalEpisode(scope, native, nativeVideo, nativeSeason, nativeEpisode,
             canonical, canonicalSeason, canonicalEpisode, allowPartAlias || nativePlaybackId(canonical),
             canonicalVideos[canonicalEpisode]?.takeIf { Regex("[A-Za-z0-9_:.-]+").matches(it) })
@@ -177,17 +177,20 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         if (season == null || episode == null) return false
         return rowsByNative.containsKey(Triple(id, season, episode)) || rowsByRef.containsKey(Triple(externalCanonical(id), season, episode))
     }
-    @Synchronized internal fun externalRelated(id: String): Set<String> {
+    @Synchronized internal fun externalRelated(id: String, seriesHint: Boolean? = null): Set<String> {
         indexExternal()
-        val movieRelated = externalMovies.related(id)
+        val movieRelated = if (seriesHint == true) emptySet() else externalMovies.related(id)
+        if (seriesHint == null && externalMovies.isNative(id) && isExternalSeries(id)) return setOf(id)
         // An untyped TMDB number can identify both a film and a series. Do not use
         // that weak alias to bridge the two graphs when expanding watched history.
-        if (id.startsWith("tmdb:") && id.removePrefix("tmdb:").toIntOrNull() != null && movieRelated.size > 1 &&
+        if (seriesHint == null && id.startsWith("tmdb:") && id.removePrefix("tmdb:").toIntOrNull() != null && movieRelated.size > 1 &&
             (rowsByTitle[externalCanonical(id)].orEmpty().isNotEmpty() || entries.value.any { it.series && id in it.aliases })) return setOf(id)
-        externalRelatedCache[id]?.let { return it }
-        val touched = (rowsByTitle[id].orEmpty() + rowsByTitle[externalCanonical(id)].orEmpty()).map(::edge).toSet()
-        return (movieRelated + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) })
-            .also { externalRelatedCache[id] = it }
+        val key = "$seriesHint\u0000$id"
+        externalRelatedCache[key]?.let { return it }
+        val touched = if (seriesHint == false) emptySet() else
+            (rowsByTitle[id].orEmpty() + rowsByTitle[externalCanonical(id)].orEmpty()).map(::edge).toSet()
+        return (setOf(id) + movieRelated + episodeClosure(touched).flatMap { listOf(it.native, it.canonical, externalCanonical(it.canonical)) })
+            .also { externalRelatedCache[key] = it }
     }
 
     /** Artwork reuses verified primary work identities; numbered-part aliases cannot replace it. */
@@ -203,6 +206,11 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         indexExternal()
         return id in partIds || externalCanonical(id) in partIds
     }
+    @Synchronized internal fun isExternalSeries(id: String): Boolean {
+        indexExternal()
+        return rowsByTitle[id].orEmpty().any { it.native == id }
+    }
+    internal fun isExternalSource(id: String) = isExternalSeries(id) || externalMovies.isNative(id)
 
     @Synchronized internal fun externalQuery(from: String, to: String, season: Int, episode: Int): Pair<Int, Int>? {
         if (from == to) return season to episode
@@ -249,8 +257,10 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         val starts = sourceRows.map(::edge).toSet()
         val linked = episodeClosure(starts)
         if (linked.isEmpty()) return value
+        val builtinTarget = entries.value.firstOrNull { it.native == target && it.series }
         val candidates = if (target == null) linked else linked.filter {
-            it.native == target || externalCanonical(it.canonical) == externalCanonical(target)
+            it.native == target || externalCanonical(it.canonical) == externalCanonical(target) ||
+                (builtinTarget != null && externalCanonical(it.canonical) == externalCanonical(builtinTarget.canonical))
         }
         val selected = candidates.sortedWith(compareBy<ExternalEpisode> { if (target != null && it.canonical == target) 0 else 1 }
             .thenBy { it.alias }.thenBy { if (nativePlaybackId(it.canonical)) 1 else 0 }
@@ -360,7 +370,7 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     @Synchronized internal fun progress(value: WatchProgress, requestedTarget: String? = null): WatchProgress {
         if (entries.value.any { it.native == value.contentId } &&
             !canProjectEpisode(value.contentId, canonical(value.contentId, true), value.season, value.episode)) return value
-        if (requestedTarget?.startsWith("xt_") == true) {
+        if (requestedTarget != null && (requestedTarget.startsWith("xt_") || isExternalSource(requestedTarget))) {
             val normalized = progress(value)
             val projected = externalProgress(normalized, requestedTarget)
             return if (projected.contentId == requestedTarget) projected else value
@@ -383,7 +393,8 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         }
         if (requestedTarget != null && progress.contentId != requestedTarget && progress == value &&
             (hasPartBinding(requestedTarget) || hasPartBinding(value.contentId))) return value
-        if (value.contentId.startsWith("xt_") && progress.contentId.startsWith("xt_") &&
+        if ((value.contentId.startsWith("xt_") || isExternalSource(value.contentId)) &&
+            (progress.contentId.startsWith("xt_") || isExternalSource(progress.contentId)) &&
             requestedTarget != null && requestedTarget != value.contentId) return value
         if (requestedTarget == null && hasPartBinding(progress.contentId) &&
             hasExternalCoordinate(progress.contentId, progress.season, progress.episode)) return progress
@@ -405,6 +416,20 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     internal fun project(items: List<WatchProgress>): List<WatchProgress> = items.map { progress(it) }
         .groupBy { Triple(it.contentId, it.season, it.episode) }.values
         .mapNotNull { group -> group.maxByOrNull { it.lastWatched } }.sortedByDescending { it.lastWatched }
+    /** Attach display/watch identity without rewriting any source playback coordinate. */
+    internal fun withWatchIdentity(meta: Meta, baseUrl: String): Meta {
+        if (meta.apiType != "series" || Regex("tt[0-9]+|tmdb:.*").matches(meta.id)) return meta
+        return meta.copy(videos = meta.videos.map { video ->
+        val season = video.season ?: return@map video
+        val episode = video.episode ?: return@map video
+        val mapped = progress(WatchProgress(meta.id, meta.apiType, meta.name, null, null, null,
+            video.id, season, episode, video.title, 0, 0, 0, addonBaseUrl = baseUrl))
+        val publicId = canonical(mapped.contentId, true)
+        if (!Regex("tt[0-9]+|tmdb:(?:tv:|series:)?[0-9]+").matches(publicId)) video
+        else video.copy(watchIdentity = com.nuvio.tv.domain.model.EpisodeWatchIdentity(
+            publicId, mapped.season ?: season, mapped.episode ?: episode))
+        })
+    }
     internal fun watched(item: WatchedItem, target: String? = null): WatchedItem {
         val mapped = progress(WatchProgress(item.contentId, item.contentType, item.title, item.poster, null, null,
             item.contentId, item.season, item.episode, null, 0, 0, item.watchedAt), target)
