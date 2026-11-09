@@ -43,7 +43,8 @@ class MetaRepositoryImpl @Inject constructor(
     private val addonRepository: AddonRepository,
     private val serverCatalog: ServerCatalog,
     private val builtinDetails: BuiltinDetailsStore? = null,
-    private val externalBridge: com.nuvio.tv.data.iptv.ExternalAddonBridge? = null
+    private val externalBridge: com.nuvio.tv.data.iptv.ExternalAddonBridge? = null,
+    private val tmdbFallback: TmdbMetadataFallback? = null
 ) : MetaRepository {
     companion object {
         private const val TAG = "MetaRepository"
@@ -483,6 +484,11 @@ class MetaRepositoryImpl @Inject constructor(
                     }
                     // Comparing against the candidate list makes "every candidate was attempted"
                     // explicit rather than implied by the loop never breaking early.
+                    val fallback = tmdbFallback?.load(inferredType, id)
+                    if (fallback != null) {
+                        addonMetaCache[cacheKey] = CachedMeta(fallback, System.currentTimeMillis() + DEFAULT_TTL_MS)
+                        return@async MetaLookupResult.Found(fallback)
+                    }
                     MetaLookupResult.NotFound(
                         attemptedAddonNames = loopAddonNames.toList(),
                         failures = loopFailures,

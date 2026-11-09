@@ -1,6 +1,7 @@
 package com.nuvio.tv.data.repository
 
 import android.content.Context
+import com.nuvio.tv.data.mapper.toDomain
 import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.data.remote.api.AddonApi
 import com.nuvio.tv.data.remote.dto.MetaDto
@@ -17,6 +18,22 @@ import org.junit.Test
 import retrofit2.Response
 
 class MetaRepositoryAddonCacheTest {
+    @Test fun `failed provider metadata uses explicit TMDB fallback once and caches the result`() = runTest {
+        val api=mockk<AddonApi>()
+        coEvery { api.getMeta(any()) } returns Response.success(MetaResponseDto(null))
+        val primary=com.nuvio.tv.domain.model.Addon(id="primary",name="Primary",version="1",description=null,logo=null,
+            baseUrl="https://primary.example",catalogs=emptyList(),types=listOf(com.nuvio.tv.domain.model.ContentType.SERIES),
+            resources=listOf(com.nuvio.tv.domain.model.AddonResource("meta",listOf("series"),listOf("tmdb:"))))
+        val fallback=mockk<TmdbMetadataFallback>()
+        val meta=MetaDto("tmdb:313314","series","Violet",tmdbId="313314").toDomain("Episode")
+        coEvery { fallback.load("series","tmdb:313314") } returns meta
+        val repo=newRepository(api,primary,fallback)
+        assertEquals(meta,(repo.getMetaFromAllAddons("series","tmdb:313314").last() as NetworkResult.Success).data)
+        assertEquals(meta,repo.getCachedMeta("series","tmdb:313314"))
+        repo.getMetaFromAllAddons("series","tmdb:313314").last()
+        coVerify(exactly=1) { fallback.load(any(),any()) }
+        coVerify(exactly=1) { api.getMeta(any()) }
+    }
 
     private val contentId = "tt3711878"
 
@@ -94,7 +111,7 @@ class MetaRepositoryAddonCacheTest {
         return newRepository(api)
     }
 
-    private fun newRepository(api: AddonApi, primary: com.nuvio.tv.domain.model.Addon? = null): MetaRepositoryImpl {
+    private fun newRepository(api: AddonApi, primary: com.nuvio.tv.domain.model.Addon? = null, fallback: TmdbMetadataFallback? = null): MetaRepositoryImpl {
         val context = mockk<Context> {
             every { getString(any()) } returns "Episode"
         }
@@ -104,7 +121,8 @@ class MetaRepositoryAddonCacheTest {
             context = context,
             api = api,
             addonRepository = addonRepository,
-            serverCatalog = mockk(relaxed = true)
+            serverCatalog = mockk(relaxed = true),
+            tmdbFallback = fallback
         )
     }
 

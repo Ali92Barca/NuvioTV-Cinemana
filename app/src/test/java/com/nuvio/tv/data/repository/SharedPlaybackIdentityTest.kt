@@ -11,6 +11,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SharedPlaybackIdentityTest {
+    @Test fun `legacy episode identities migrate on first bridge access without requiring a new match`() {
+        val source="https://example.test/subscription"
+        val scope=java.security.MessageDigest.getInstance("SHA-256").digest(source.toByteArray()).joinToString("") { "%02x".format(it) }
+        val native="xt_s_src_42"
+        values["external_episodes_v1"] = com.google.gson.Gson().toJson(listOf(
+            SharedPlaybackIdentity.ExternalEpisode(scope,native,"$native:2:19",2,19,"tt1234",2,1)))
+        val restored=SharedPlaybackIdentity(context)
+        restored.migrateLegacyCache()
+        assertNull(values["external_episodes_v1"])
+        assertEquals(listOf("$native:2:19"),restored.externalEpisodeSources(source,"tt1234",2,1))
+        assertEquals(listOf("$native:2:19"),SharedPlaybackIdentity(context).externalEpisodeSources(source,"tt1234",2,1))
+        assertTrue(files.keys.any { it == "iptv_identity_$scope" })
+    }
     @Test fun `verified replacement native video updates the cached route without moving progress`() {
         val source = "https://example.test/source"
         val native = "xt_s_src_42"

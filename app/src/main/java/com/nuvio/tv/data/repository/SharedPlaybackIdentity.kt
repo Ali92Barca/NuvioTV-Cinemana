@@ -478,4 +478,10 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
             item.contentId, item.season, item.episode, null, 0, 0, item.watchedAt), target)
         return item.copy(contentId = mapped.contentId, season = mapped.season, episode = mapped.episode)
     }
+
+    @Synchronized internal fun migrateLegacyCache() {
+        // Upgrade existing identities even when no new episode needs to be learned.
+        // Each scoped file is committed before the legacy source is removed.
+        if (prefs.getString("external_episodes_v1", null) != null) persistExternalEpisodes()
+    }
 }

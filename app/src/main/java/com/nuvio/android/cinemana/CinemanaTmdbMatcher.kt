@@ -77,12 +77,15 @@ class CinemanaTmdbMatcher(
             } }.map { it.await() }
         }
         val candidates = linkedMapOf<Int, JSONObject>()
+        val matchedNames = mutableMapOf<Int, MutableSet<String>>()
         for (results in responses.filterNotNull()) for (i in 0 until results.length()) {
             val item = results.optJSONObject(i) ?: continue
             val id = item.optInt("id")
             if (id <= 0) continue
             val labels = listOf(item.optString(if (series) "name" else "title"), item.optString(if (series) "original_name" else "original_title"))
-            if (labels.none { normalize(it) in names }) continue
+            val exactNames = labels.map(::normalize).filter { it in names }.toSet()
+            if (exactNames.isEmpty()) continue
+            matchedNames.getOrPut(id) { mutableSetOf() }.addAll(exactNames)
             candidates.putIfAbsent(id, item)
         }
         val matches = coroutineScope {
@@ -99,7 +102,8 @@ class CinemanaTmdbMatcher(
                     item.optString("overview").takeIf { it.isNotBlank() && it != "null" },
                     posterPath.takeIf { it.startsWith('/') }?.let { "https://image.tmdb.org/t/p/w500$it" },
                     firstYear,
-                    100.0 + if (year != null && firstYear != null) (25 - abs(year - firstYear) * 5).coerceAtLeast(0) else 0,
+                    100.0 + (matchedNames[id].orEmpty().size - 1).coerceAtLeast(0) * 10.0 +
+                        (if (year != null && firstYear != null) (25 - abs(year - firstYear) * 5).coerceAtLeast(0) else 0),
                 )
             } }.mapNotNull { it.await() }
         }.sortedByDescending { it.score }

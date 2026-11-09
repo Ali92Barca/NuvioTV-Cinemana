@@ -167,6 +167,7 @@ class ExternalAddonBridge @Inject constructor(
 
     suspend fun resolveAll(addon: Addon, type: String, canonical: Meta, season: Int?, episode: Int?,
         onResolved: (suspend (String) -> Unit)? = null): List<String> {
+        withContext(Dispatchers.IO) { identities?.migrateLegacyCache() }
         val accepted = linkedSetOf<String>()
         return withTimeoutOrNull(25_000) {
             if (type == "movie") {
@@ -333,6 +334,7 @@ class ExternalAddonBridge @Inject constructor(
 
     /** Learn the inverse direction when a user opens an Xtream catalog title directly. */
     suspend fun enrichNative(addon: Addon, native: Meta): Meta = withContext(Dispatchers.IO) {
+        identities?.migrateLegacyCache()
         val publicEvidence = native.tmdbId?.toIntOrNull()?.let { it > 0 } == true || native.imdbId?.matches(Regex("tt[0-9]+")) == true
         if (!com.nuvio.tv.data.repository.privateAddonId(native.id) ||
             (!(isXtream(addon) && native.id.startsWith("xt_")) && !publicEvidence))
