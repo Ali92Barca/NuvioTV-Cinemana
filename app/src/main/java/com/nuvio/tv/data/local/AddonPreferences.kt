@@ -136,6 +136,15 @@ class AddonPreferences @Inject constructor(
         return changed
     }
 
+    /** Called only on removal, not on catalog navigation or playback. Disabled addons still own their cache. */
+    suspend fun isInstalledInAnyProfile(url: String): Boolean {
+        val target = canonicalizeUrl(url)
+        val ids = (profileManager.profiles.value.map { if (it.usesPrimaryAddons) 1 else it.id } + effectiveProfileId()).distinct()
+        return ids.any { id ->
+            getCurrentList(store(id).data.first()).any { canonicalizeUrl(it).equals(target, ignoreCase = true) }
+        }
+    }
+
     suspend fun setAddonOrder(urls: List<String>): Boolean {
             val active = profileManager.activeProfile
             if (active != null && !active.isPrimary && active.usesPrimaryAddons) return false

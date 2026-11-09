@@ -5,6 +5,7 @@ import com.nuvio.tv.data.remote.dto.*
 import com.nuvio.tv.domain.model.*
 import com.nuvio.tv.data.mapper.toDomain
 import com.nuvio.tv.data.repository.SharedPlaybackIdentity
+import com.nuvio.tv.data.repository.PlaybackIdentity
 import com.nuvio.tv.data.remote.api.TmdbApi
 import com.nuvio.tv.data.remote.api.TmdbDetailsResponse
 import com.nuvio.tv.data.remote.api.TmdbExternalIdsResponse
@@ -15,6 +16,115 @@ import org.junit.Test
 import retrofit2.Response
 
 class ExternalAddonBridgeTest {
+    @Test fun incompleteSeasonResponseDoesNotRevokeAnEstablishedDurableWork() = runBlocking {
+        org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
+        val source = addon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("xt_"))))
+        val native = MetaDto("xt_s_src_42","series","Example",videos = listOf(
+            VideoDto("xt_s_src_42:1:1",season=1,episode=1))).toDomain("Episode")
+        val stored = com.google.gson.JsonObject().apply { addProperty("tmdb","42"); addProperty("translated",true) }
+        val cache = mockk<IptvIdentityCache>(relaxed=true) { every { work(source.baseUrl,native.id) } returns stored }
+        val identities = mockk<SharedPlaybackIdentity>(relaxed=true)
+        every { identities.entries } returns kotlinx.coroutines.flow.MutableStateFlow<List<PlaybackIdentity>>(emptyList())
+        every { identities.withWatchIdentity(any(),any()) } answers { firstArg() }
+        val tmdb = mockk<TmdbApi>()
+        coEvery { tmdb.getTvDetails(42,any(),any()) } returns Response.success(TmdbDetailsResponse(42,name="Example",originalLanguage="tr"))
+        coEvery { tmdb.getTvExternalIds(42,any()) } returns Response.success(TmdbExternalIdsResponse(42,imdbId="tt1234567"))
+        coEvery { tmdb.getTvSeasonDetails(42,1,any(),any()) } returns Response.success(com.nuvio.tv.data.remote.api.TmdbSeasonResponse(1,emptyList()))
+        ExternalAddonBridge(api,tmdb,identities,cache).enrichNative(source,native)
+        verify(exactly=0) { identities.invalidateExternalSeason(any(),any(),any(),any()) }
+    }
+    @Test fun existingRouteReturnsWhileOneCoalescedRefreshWaitsAndRemovalCancelsIt() = runBlocking {
+        org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
+        val source = addon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("xt_"))))
+        val native = MetaDto("xt_s_src_42", "series", "Example", videos = (1..9).map {
+            VideoDto("xt_s_src_42:1:$it", season = 1, episode = it)
+        }).toDomain("Episode")
+        val stored = com.google.gson.JsonObject().apply {
+            addProperty("tmdb", "42"); addProperty("imdb", "tt1234567")
+            addProperty("nativeLayout", "previous-layout"); addProperty("providerLayout", "previous-provider")
+            add("verifiedVideos", com.google.gson.JsonArray().apply { native.videos.take(8).forEach { add(it.id) } })
+        }
+        val cache = mockk<IptvIdentityCache>(relaxed = true) { every { work(source.baseUrl,native.id) } returns stored }
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        every { identities.entries } returns kotlinx.coroutines.flow.MutableStateFlow<List<PlaybackIdentity>>(emptyList())
+        every { identities.hasExternalSeries(source.baseUrl,native.id) } returns true
+        every { identities.withWatchIdentity(any(),source.baseUrl) } answers { firstArg() }
+        val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val stopped = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val blocker = kotlinx.coroutines.CompletableDeferred<Response<TmdbDetailsResponse>>()
+        val tmdb = mockk<TmdbApi>()
+        coEvery { tmdb.getTvDetails(42,any(),any()) } coAnswers {
+            started.complete(Unit)
+            try { blocker.await() } finally { stopped.complete(Unit) }
+        }
+        val bridge = ExternalAddonBridge(api,tmdb,identities,cache)
+        repeat(2) {
+            val result = kotlinx.coroutines.withTimeout(10_000) { bridge.enrichNative(source,native) }
+            assertEquals(8,result.verifiedPlaybackVideoIds?.size)
+            assertFalse(result.verifiedPlaybackVideoIds.orEmpty().contains("xt_s_src_42:1:9"))
+        }
+        kotlinx.coroutines.withTimeout(10_000) { started.await() }
+        coVerify(exactly = 1) { tmdb.getTvDetails(42,any(),any()) }
+        bridge.forgetAddon(source.baseUrl)
+        kotlinx.coroutines.withTimeout(10_000) { stopped.await() }
+        verify(exactly = 1) { identities.forgetExternalAddon(source.baseUrl) }
+    }
+    @Test fun durableRouteReopensAcrossBridgeInstancesWithoutAnyNetworkMatching() = runBlocking {
+        org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
+        val source = addon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("xt_"))))
+        val native = MetaDto("xt_s_src_42", "series", "Example", videos = (1..8).map {
+            VideoDto("xt_s_src_42:1:$it", season = 1, episode = it)
+        }).toDomain("Episode")
+        fun hash(value: String) = java.security.MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
+        val stored = com.google.gson.JsonObject().apply {
+            addProperty("tmdb", "42"); addProperty("imdb", "tt1234567")
+            addProperty("nativeLayout", hash(native.videos.map { listOf(it.id,it.season,it.episode) }.toString()))
+            addProperty("providerLayout", hash("[]"))
+            add("verifiedVideos", com.google.gson.JsonArray().apply { native.videos.forEach { add(it.id) } })
+        }
+        val cache = mockk<IptvIdentityCache> { every { work(source.baseUrl, native.id) } returns stored }
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        every { identities.entries } returns kotlinx.coroutines.flow.MutableStateFlow<List<PlaybackIdentity>>(emptyList())
+        every { identities.hasExternalSeries(source.baseUrl, native.id) } returns true
+        every { identities.withWatchIdentity(any(), source.baseUrl) } answers { firstArg() }
+        val tmdb = mockk<TmdbApi>()
+        repeat(2) {
+            val result = ExternalAddonBridge(api, tmdb, identities, cache).enrichNative(source,native)
+            assertEquals("tt1234567", result.imdbId)
+            assertTrue(result.sharedProgressCompatible)
+            assertEquals(8, result.verifiedPlaybackVideoIds?.size)
+        }
+        coVerify(exactly = 0) { api.getMeta(any()) }
+        coVerify(exactly = 0) { api.getCatalog(any()) }
+        coVerify(exactly = 0) { api.getStreams(any()) }
+        coVerify(exactly = 0) { tmdb.getTvDetails(any(),any(),any()) }
+        coVerify(exactly = 0) { tmdb.getTvSeasonDetails(any(),any(),any(),any()) }
+    }
+    @Test fun originalEditionAddsNewVerifiedProviderEpisodeBeforeTmdbUpdates() {
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        every { identities.verifiedSeriesSeasonAvailable("42", 1) } returns (1..9).toSet()
+        val map = ExternalAddonBridge(api, identities = identities).sharedOriginalMap("42",
+            mapOf(1 to (1..8).toSet()), mapOf(1 to (1..10).toList()), 1, 1)!!
+        assertEquals(9, map[9])
+        assertFalse(10 in map)
+    }
+    @Test fun nonTurkishTranslatedCatalogSharesCommonEpisodesWithoutDatesOrEqualCounts() = runBlocking {
+        val source = addon().copy(catalogs = listOf(CatalogDescriptor(ContentType.SERIES, id = "all", name = "All", extra = listOf(CatalogExtra("search")))))
+        val nativeId = "xt_s_src_42"
+        val canonical = MetaDto("tt1234567", "series", "Example", tmdbId = "42", imdbId = "tt1234567",
+            videos = (1..8).map { VideoDto("tt1234567:1:$it", title = "Official $it", season = 1, episode = it) }).toDomain("Episode")
+        coEvery { api.getCatalog(any()) } returns Response.success(CatalogResponseDto(listOf(MetaPreviewDto(nativeId,"series","Example"))))
+        coEvery { api.getMeta(any()) } returns Response.success(MetaResponseDto(MetaDto(nativeId,"series","Example",
+            videos = (1..10).map { VideoDto("$nativeId:1:$it", title = "Different label $it", season = 1, episode = it) })))
+        val cache = mockk<IptvIdentityCache>(relaxed = true) { every { translated(source.baseUrl, nativeId) } returns true }
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        val translated = ExternalAddonBridge(api, identities = identities, matchCache = cache)
+        assertEquals("$nativeId:1:8", translated.resolve(source,"series",canonical,1,8))
+        assertNull(translated.resolve(source,"series",canonical,1,9))
+        verify { identities.learnExternalSeason(source.baseUrl, nativeId, "tt1234567", 1, 1,
+            match { it.size == 8 && it.last().third == 8 }, any(), any()) }
+        assertNull(ExternalAddonBridge(api).resolve(source,"series",canonical,1,8))
+    }
     @Test fun verifiedEpisodeCacheRejectsConflictingEpisodeSuffixes() {
         val identities = mockk<SharedPlaybackIdentity> {
             every { externalEpisodeSources(any(), "tt38282411", 2, 2) } returns listOf("xt_s_src_42:2:20")
@@ -39,10 +149,12 @@ class ExternalAddonBridgeTest {
         assertFalse(bridge.translatedEdition(source.copy(baseUrl = "https://other.test"), native))
         coVerify(exactly = 2) { api.getStreams(any()) }
     }
-    @Test fun translatedProofRequiresAnArabicTranslatedTurkishEdition() {
+    @Test fun translatedProofSupportsAnyOriginalLanguage() {
         assertTrue(bridge.translatedLabel("AR-TR-S - Alikara"))
         assertTrue(bridge.translatedLabel("يعرض الآن تركي مترجم"))
         assertTrue(bridge.translatedLabel("مسلسلات تركية مترجمة"))
+        assertTrue(bridge.translatedLabel("مسلسلات أجنبية مترجمة"))
+        assertTrue(bridge.translatedLabel("كوري مترجم"))
         assertFalse(bridge.translatedLabel("AR-TR-D - Alikara مدبلج"))
         assertFalse(bridge.translatedLabel("ENGLISH SERIES (TR)"))
         assertFalse(bridge.translatedLabel("فارسي"))

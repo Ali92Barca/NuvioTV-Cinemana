@@ -58,7 +58,8 @@ class AddonRepositoryImpl(
     private val dispatcher: CoroutineDispatcher,
     /** Source of the refresh clock, injectable so the TTL policy can be tested without waiting. */
     private val clock: () -> Long,
-    private val builtinAddonUrls: List<String> = emptyList()
+    private val builtinAddonUrls: List<String> = emptyList(),
+    private val externalBridge: com.nuvio.tv.data.iptv.ExternalAddonBridge? = null
 ) : AddonRepository {
 
     @Inject
@@ -67,7 +68,8 @@ class AddonRepositoryImpl(
         preferences: AddonPreferences,
         addonSyncService: AddonSyncService,
         authManager: AuthManager,
-        @ApplicationContext context: Context
+        @ApplicationContext context: Context,
+        externalBridge: com.nuvio.tv.data.iptv.ExternalAddonBridge
     ) : this(
         api = api,
         preferences = preferences,
@@ -76,6 +78,7 @@ class AddonRepositoryImpl(
         context = context,
         dispatcher = Dispatchers.IO,
         clock = System::currentTimeMillis,
+        externalBridge = externalBridge,
         builtinAddonUrls = listOf(
         com.nuvio.tv.data.cinemana.CinemanaAddonApi.BASE_URL,
         com.nuvio.tv.data.cee.CeeAddonApi.BASE_URL
@@ -334,6 +337,9 @@ class AddonRepositoryImpl(
     override suspend fun removeAddon(url: String) {
         val cleanUrl = canonicalizeUrl(url)
         if (!preferences.removeAddon(cleanUrl)) return
+        if (!preferences.isInstalledInAnyProfile(cleanUrl)) kotlinx.coroutines.withContext(dispatcher) {
+            externalBridge?.forgetAddon(cleanUrl)
+        }
         if (removeCachedManifest(cleanUrl)) {
             persistManifestCacheToDisk()
             bumpManifestCacheRevision()
@@ -400,7 +406,9 @@ class AddonRepositoryImpl(
             val removedAny = initialLocalUrls
                 .filter { normalizeUrl(it) !in remoteSet }
                 .map { canonicalizeUrl(it) }
-                .fold(false) { removed, url -> removeCachedManifest(url) || removed }
+                .fold(false) { removed, url ->
+                    removeCachedManifest(url) || removed
+                }
             if (removedAny) {
                 persistManifestCacheToDisk()
                 bumpManifestCacheRevision()
@@ -411,6 +419,11 @@ class AddonRepositoryImpl(
         val currentCanonical = initialLocalUrls.map { canonicalizeUrl(it) }
         if (finalList != currentCanonical) {
             preferences.setAddonOrder(finalList)
+        }
+        if (shouldRemoveMissingLocal) initialLocalUrls.filter { normalizeUrl(it) !in remoteSet }.forEach { url ->
+            if (!preferences.isInstalledInAnyProfile(url)) kotlinx.coroutines.withContext(dispatcher) {
+                externalBridge?.forgetAddon(canonicalizeUrl(url))
+            }
         }
     }
 

@@ -8,12 +8,12 @@ on:
       - 'gradle.properties'
       - 'scripts/configure-services.py'
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     if: "!contains(github.event.head_commit.message, '[release-candidate]')"
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -54,18 +54,14 @@ jobs:
           PY
       - name: Test integrations and build full APK
         run: |
-          ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.android.cinemana.CinemanaStreamConcurrencyTest' --tests 'com.nuvio.android.cinemana.CinemanaEditionResolutionTest' --tests 'com.nuvio.android.cinemana.CinemanaEpisodeMappingRegressionTest' --tests 'com.nuvio.tv.ui.components.BuiltinCatalogPosterTest' --tests 'com.nuvio.tv.ui.components.ProgressiveIptvPosterTest' --tests 'com.nuvio.tv.data.iptv.*' --tests 'com.nuvio.tv.data.repository.StreamRepositoryPluginIsolationTest' --tests 'com.nuvio.tv.data.repository.StreamRequestRecoveryTest' --tests 'com.nuvio.tv.data.builtincache.BuiltinDetailsStoreUpgradeTest' --tests 'com.nuvio.tv.data.repository.StreamSearchSessionCacheTest' --tests 'com.nuvio.tv.data.repository.MetaRepositoryAddonCacheTest' --tests 'com.nuvio.tv.data.repository.SharedPlaybackIdentityTest' --tests 'com.nuvio.tv.data.repository.SharedMetadataRequestTest' --tests 'com.nuvio.tv.data.repository.HistoryProjectionCacheTest' --tests 'com.nuvio.tv.core.sync.WatchState*Test' --tests 'com.nuvio.tv.core.sync.WatchedDeltaReconciliationTest' --tests 'com.nuvio.tv.data.local.WatchedItems*Test' --tests 'com.nuvio.tv.data.local.WatchProgressPreferencesStorageTest' --tests 'com.nuvio.tv.ui.screens.home.ContinueWatching*Test' --tests 'com.nuvio.tv.ui.screens.home.WatchedSeriesBadgeReconciliationTest' --tests 'com.nuvio.tv.ui.screens.detail.EpisodeWatchedProjectionTest' --tests 'com.nuvio.tv.ui.screens.player.PlayerDisplayIdentityTest' --tests 'com.nuvio.tv.data.local.WatchedSeriesStateHolderProfileTest' --tests 'com.nuvio.tv.data.repository.WatchProgressRepositoryProfileIsolationTest' --tests 'com.nuvio.tv.data.repository.TraktAuthServiceTest' :app:assembleFullDebug --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
-      - uses: actions/upload-artifact@v4
-        with:
-          name: BetterStream-full-debug-services
-          path: app/build/outputs/apk/full/debug/app-full-universal-debug.apk
-          if-no-files-found: error
-          retention-days: 7
-      - uses: actions/upload-artifact@v4
+          ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.tv.data.repository.AddonManifestPlaceholderTest' --tests 'com.nuvio.android.cinemana.CinemanaStreamConcurrencyTest' --tests 'com.nuvio.android.cinemana.CinemanaEditionResolutionTest' --tests 'com.nuvio.android.cinemana.CinemanaEpisodeMappingRegressionTest' --tests 'com.nuvio.tv.ui.components.BuiltinCatalogPosterTest' --tests 'com.nuvio.tv.ui.components.ProgressiveIptvPosterTest' --tests 'com.nuvio.tv.data.iptv.*' --tests 'com.nuvio.tv.data.repository.StreamRepositoryPluginIsolationTest' --tests 'com.nuvio.tv.data.repository.StreamRequestRecoveryTest' --tests 'com.nuvio.tv.data.builtincache.BuiltinDetailsStoreUpgradeTest' --tests 'com.nuvio.tv.data.repository.StreamSearchSessionCacheTest' --tests 'com.nuvio.tv.data.repository.MetaRepositoryAddonCacheTest' --tests 'com.nuvio.tv.data.repository.SharedPlaybackIdentityTest' --tests 'com.nuvio.tv.data.repository.SharedMetadataRequestTest' --tests 'com.nuvio.tv.data.repository.HistoryProjectionCacheTest' --tests 'com.nuvio.tv.core.sync.WatchState*Test' --tests 'com.nuvio.tv.core.sync.WatchedDeltaReconciliationTest' --tests 'com.nuvio.tv.data.local.WatchedItems*Test' --tests 'com.nuvio.tv.data.local.WatchProgressPreferencesStorageTest' --tests 'com.nuvio.tv.ui.screens.home.ContinueWatching*Test' --tests 'com.nuvio.tv.ui.screens.home.WatchedSeriesBadgeReconciliationTest' --tests 'com.nuvio.tv.ui.screens.detail.EpisodeWatchedProjectionTest' --tests 'com.nuvio.tv.ui.screens.player.PlayerDisplayIdentityTest' --tests 'com.nuvio.tv.data.local.WatchedSeriesStateHolderProfileTest' --tests 'com.nuvio.tv.data.repository.WatchProgressRepositoryProfileIsolationTest' --tests 'com.nuvio.tv.data.repository.TraktAuthServiceTest' :app:assembleFullDebug --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
+      - name: Retain private unpublished test APK and reports
         if: always()
-        with:
-          name: BetterStream-service-test-results
-          path: app/build/test-results/testFullDebugUnitTest/*.xml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_VARIANT: debug
+          CANDIDATE_BUILD_STATUS: ${{ job.status }}
+        run: python3 scripts/store_release_candidate.py
       - name: Remove temporary service properties
         if: always()
         run: rm -f local.properties local.dev.properties

@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ExternalEpisodeNumberingTest {
+    @Test fun trustedTranslationUsesSourceCumulativeOffsetDespiteDifferentPreviousAvailability() {
+        val expected = mapOf(1 to (1..8).toSet(), 2 to (1..5).toSet())
+        val source = mapOf(1 to (1..10).toList(), 2 to (11..17).toList())
+        assertEquals((1..5).associateWith { it + 10 }, ExternalEpisodeNumbering.translatedMap(expected, source, 2, 2))
+        assertNull(ExternalEpisodeNumbering.episodeMap(expected, source, 2, 2, (1..5).toSet(), false, true))
+    }
     @Test fun translatedSharedEpisodesSurviveDifferentAvailabilityAndFutureGrowth() {
         val source = mapOf(1 to (1..10).toList())
         val first = ExternalEpisodeNumbering.translatedMap(mapOf(1 to (1..8).toSet()), source, 1, 1)!!

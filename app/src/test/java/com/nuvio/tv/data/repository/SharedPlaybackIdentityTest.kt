@@ -11,6 +11,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SharedPlaybackIdentityTest {
+    @Test fun `verified replacement native video updates the cached route without moving progress`() {
+        val source = "https://example.test/source"
+        val native = "xt_s_src_42"
+        registry.learnExternalEpisode(source,native,"$native:1:1",1,1,"tt1234",1,1)
+        registry.learnExternalEpisode(source,native,"$native:1:1001",1,1,"tt1234",1,1)
+        assertEquals(listOf("$native:1:1001"), registry.externalEpisodeSources(source,"tt1234",1,1))
+        val raw = progress(native,series=true).copy(videoId="$native:1:1",addonBaseUrl=source)
+        val mapped = registry.progress(raw)
+        assertEquals("tt1234",mapped.contentId)
+        assertEquals(raw.position,mapped.position)
+        assertEquals(raw.duration,mapped.duration)
+        assertEquals(listOf("$native:1:1001"), SharedPlaybackIdentity(context).externalEpisodeSources(source,"tt1234",1,1))
+    }
     @Test fun `addon reusing one opaque ID for movie and series cannot join their watched graphs`() {
         val native="custom:42"
         registry.learnExternalEpisode("https://addon.test",native,"custom:episode:1",1,1,"tt1234",1,1)
@@ -142,17 +155,26 @@ class SharedPlaybackIdentityTest {
         assertNull(registry.verifiedSeriesSeasonAvailable("123", 1))
     }
     private val values = mutableMapOf<String, String>()
-    private val editor = mockk<SharedPreferences.Editor>(relaxed = true) {
-        every { putString(any(), any()) } answers { values[firstArg()] = secondArg(); this@mockk }
-        every { commit() } returns true
-    }
-    private val prefs = mockk<SharedPreferences> {
-        every { all } returns emptyMap()
-        every { getString(any(), any()) } answers { values[firstArg()] ?: secondArg() }
-        every { edit() } returns editor
+    private val files = mutableMapOf<String, SharedPreferences>()
+    private fun preferences(name: String): SharedPreferences = files.getOrPut(name) {
+        val strings = if (name == "shared_playback_identity_v1") values else mutableMapOf()
+        val sets = mutableMapOf<String, Set<String>>()
+        val editor = mockk<SharedPreferences.Editor>(relaxed = true) {
+            every { putString(any(), any()) } answers { strings[firstArg()] = secondArg(); this@mockk }
+            every { putStringSet(any(), any()) } answers { sets[firstArg()] = secondArg(); this@mockk }
+            every { remove(any()) } answers { strings.remove(firstArg<String>()); this@mockk }
+            every { clear() } answers { strings.clear(); sets.clear(); this@mockk }
+            every { commit() } returns true
+        }
+        mockk<SharedPreferences> {
+            every { all } returns emptyMap()
+            every { getString(any(), any()) } answers { strings[firstArg()] ?: secondArg() }
+            every { getStringSet(any(), any()) } answers { sets[firstArg()]?.toMutableSet() ?: secondArg<Set<String>>().toMutableSet() }
+            every { edit() } returns editor
+        }
     }
     private val context = mockk<Context> {
-        every { getSharedPreferences(any(), any()) } returns prefs
+        every { getSharedPreferences(any(), any()) } answers { preferences(firstArg()) }
     }
     private val registry = SharedPlaybackIdentity(context)
     private fun meta(id: String, tmdb: String = "123", series: Boolean = false, safe: Boolean = false) = Meta(

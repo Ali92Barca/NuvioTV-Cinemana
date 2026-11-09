@@ -10,7 +10,9 @@ from zipfile import ZipFile, ZIP_DEFLATED
 repo = os.environ['GITHUB_REPOSITORY']
 sha = os.environ['GITHUB_SHA']
 assert re.fullmatch(r'[0-9a-f]{40}', sha)
-tag = 'private-candidate-1.0.3'
+debug = os.environ.get('CANDIDATE_VARIANT') == 'debug'
+test_number = re.search(r'^experimentalTestNumber=(\d+)$', Path('gradle.properties').read_text(), re.M)[1]
+tag = f'private-test-{test_number}' if debug else 'private-candidate-1.0.3'
 
 
 def api(path, payload=None, method=None):
@@ -35,7 +37,8 @@ assets = Path('candidate-assets')
 assets.mkdir(exist_ok=True)
 paths = []
 for source, destination in [
-    (Path('app/build/outputs/apk/full/release/app-full-universal-release.apk'), f'NuvioTV-1.0.3-{sha}.apk'),
+    (Path('app/build/outputs/apk/full/debug/app-full-universal-debug.apk') if debug else Path('app/build/outputs/apk/full/release/app-full-universal-release.apk'),
+     f'NuvioTV-Test-{test_number}-{sha}.apk' if debug else f'NuvioTV-1.0.3-{sha}.apk'),
     (Path('release-candidate-verification.json'), f'verification-{sha}.json'),
 ]:
     if source.is_file():
@@ -65,7 +68,7 @@ for page in range(1, 100):
 if existing:
     assert existing['draft'] and existing['published_at'] is None, 'Refusing to modify a published release'
 payload = {'tag_name': tag, 'target_commitish': sha, 'draft': True, 'prerelease': True,
-           'name': '1.0.3 private test candidate (UNPUBLISHED)',
+           'name': f'Test {test_number} private candidate (UNPUBLISHED)' if debug else '1.0.3 private test candidate (UNPUBLISHED)',
            'body': f'Private build storage only. Do not publish before owner testing/approval.\n\nSource: {sha}\nWorkflow: {os.environ.get("GITHUB_RUN_ID")}\nBuild status before storage: {os.environ.get("CANDIDATE_BUILD_STATUS", "unknown")}\nAPK must pass the exact-source verification receipt before installation.'}
 path = f'repos/{repo}/releases' + (f'/{existing["id"]}' if existing else '')
 draft = api(path, payload, 'PATCH' if existing else 'POST')

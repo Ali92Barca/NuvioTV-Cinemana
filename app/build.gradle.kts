@@ -240,7 +240,7 @@ android {
             val experimentalTestNumber = providers.gradleProperty("experimentalTestNumber").get()
             require(experimentalTestNumber.toIntOrNull()?.let { it > 0 } == true)
             versionNameSuffix = " Test $experimentalTestNumber"
-            resValue("string", "app_name", "Nuvio ${android.defaultConfig.versionName} Test $experimentalTestNumber")
+            resValue("string", "app_name", "Nuvio ${providers.gradleProperty("experimentalBaseVersion").get()} Test $experimentalTestNumber")
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = true
             isMinifyEnabled = false
@@ -383,6 +383,8 @@ androidComponents {
     onVariants(selector().withBuildType("debug")) { variant ->
         val isPlaystore = variant.productFlavors.any { it.second == "playstore" }
         variant.applicationId.set("com.ali92barca.nuviotv.debug")
+        val testName = "${providers.gradleProperty("experimentalBaseVersion").get()} Test ${providers.gradleProperty("experimentalTestNumber").get()}"
+        variant.outputs.forEach { it.versionName.set(testName) }
     }
     // Only the full flavor ships the in-app updater.
     onVariants(selector().withFlavor("distribution" to "full")) { variant ->

@@ -43,6 +43,20 @@ import java.util.concurrent.atomic.AtomicLong
  * JVM.
  */
 class AddonManifestPlaceholderTest {
+    @Test fun addonRemovalClearsItsIdentityCacheButFailedRemovalDoesNot() = runBlocking {
+        val bridge = mockk<com.nuvio.tv.data.iptv.ExternalAddonBridge>(relaxed = true)
+        val harness = newRepository(externalBridge = bridge)
+        coEvery { harness.preferences.removeAddon(any()) } returns false
+        harness.repository.removeAddon(addonUrl)
+        io.mockk.verify(exactly = 0) { bridge.forgetAddon(any()) }
+        coEvery { harness.preferences.removeAddon(any()) } returns true
+        coEvery { harness.preferences.isInstalledInAnyProfile(any()) } returns true
+        harness.repository.removeAddon(addonUrl)
+        io.mockk.verify(exactly = 0) { bridge.forgetAddon(any()) }
+        coEvery { harness.preferences.isInstalledInAnyProfile(any()) } returns false
+        harness.repository.removeAddon(addonUrl)
+        io.mockk.verify(exactly = 1) { bridge.forgetAddon(any()) }
+    }
 
     private val addonUrl = "https://addon.example"
 
@@ -238,7 +252,8 @@ class AddonManifestPlaceholderTest {
         userSetNames: kotlinx.coroutines.flow.Flow<Map<String, String>> = flowOf(emptyMap()),
         reachable: Boolean = false,
         dispatcher: CoroutineDispatcher = Dispatchers.IO,
-        clock: () -> Long = System::currentTimeMillis
+        clock: () -> Long = System::currentTimeMillis,
+        externalBridge: com.nuvio.tv.data.iptv.ExternalAddonBridge? = null
     ): Harness {
         val manifestCalls = AtomicInteger()
         val isReachable = AtomicBoolean(reachable)
@@ -256,6 +271,7 @@ class AddonManifestPlaceholderTest {
         every { preferences.userSetNames } returns userSetNames
         every { preferences.addonEnabledStates } returns flowOf(emptyMap())
         coEvery { preferences.removeAddon(any()) } returns true
+        coEvery { preferences.isInstalledInAnyProfile(any()) } returns false
 
         return Harness(
             repository = AddonRepositoryImpl(
@@ -265,7 +281,8 @@ class AddonManifestPlaceholderTest {
                 authManager = mockk<AuthManager>(relaxed = true),
                 context = newContext(),
                 dispatcher = dispatcher,
-                clock = clock
+                clock = clock,
+                externalBridge = externalBridge
             ),
             preferences = preferences,
             manifestCalls = manifestCalls,

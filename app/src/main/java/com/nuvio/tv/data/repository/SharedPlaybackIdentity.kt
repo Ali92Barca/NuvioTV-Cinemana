@@ -19,7 +19,8 @@ internal data class PlaybackIdentity(val native: String, val canonical: String, 
 
 /** Verified identity only, independent of profile-specific watch state. No media IDs are migrated. */
 @Singleton
-class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Context) {
+class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Context,
+    private val iptvCache: com.nuvio.tv.data.iptv.IptvIdentityCache = com.nuvio.tv.data.iptv.IptvIdentityCache(context)) {
     private val prefs = context.getSharedPreferences("shared_playback_identity_v1", Context.MODE_PRIVATE)
     internal val entries = MutableStateFlow(read())
     /** Reuse a provider's verified layout when TMDB already lists a newer episode. */
@@ -43,8 +44,11 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         val canonicalSeason: Int, val canonicalEpisode: Int, val alias: Boolean = false,
         val canonicalVideo: String? = null)
     private val externalRows = runCatching {
-        Gson().fromJson<List<ExternalEpisode>>(prefs.getString("external_episodes_v1", "[]"),
-            object : TypeToken<List<ExternalEpisode>>() {}.type).orEmpty()
+        (listOf(prefs.getString("external_episodes_v1", "[]") ?: "[]") + iptvCache.episodeFiles()).flatMap { json ->
+            runCatching { Gson().fromJson<List<ExternalEpisode>>(json,
+                object : TypeToken<List<ExternalEpisode>>() {}.type).orEmpty() }.getOrDefault(emptyList())
+        }.filter { !it.scope.isNullOrBlank() && !it.native.isNullOrBlank() && !it.nativeVideo.isNullOrBlank() &&
+            !it.canonical.isNullOrBlank() && it.nativeSeason > 0 && it.nativeEpisode > 0 && it.canonicalEpisode > 0 }.distinct()
     }.getOrDefault(emptyList()).toMutableList()
     internal val externalRevision = MutableStateFlow(0L)
     @Volatile private var externalMovies = ExternalMovieIdentities(runCatching {
@@ -130,12 +134,28 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
     private fun sourceScope(url: String) = java.security.MessageDigest.getInstance("SHA-256")
         .digest(url.trimEnd('/').toByteArray()).joinToString("") { "%02x".format(it) }
 
+    private fun persistExternalEpisodes() {
+        externalRows.groupBy { it.scope }.forEach { (scope, rows) -> iptvCache.saveEpisodes(scope, Gson().toJson(rows)) }
+        check(prefs.edit().remove("external_episodes_v1").commit())
+    }
+    /** Removing one addon never deletes any profile's actual watch history. */
+    @Synchronized fun forgetExternalAddon(baseUrl: String) {
+        val scope = sourceScope(baseUrl)
+        externalRows.removeAll { it.scope == scope }
+        externalMovies = ExternalMovieIdentities(externalMovies.rows.filterNot { it.scope == scope })
+        check(prefs.edit().putString("external_movies_v1", Gson().toJson(externalMovies.rows)).commit())
+        persistExternalEpisodes()
+        iptvCache.remove(baseUrl)
+        externalRevision.value += 1
+    }
+
     /** Revoke a disproven edition match without deleting any profile's actual watch records. */
     @Synchronized internal fun invalidateExternalSeason(baseUrl: String, native: String, season: Int, canonical: String) {
         val scope = sourceScope(baseUrl)
         if (!externalRows.removeAll { it.scope == scope && it.native == native && it.nativeSeason == season &&
                 externalCanonical(it.canonical) == externalCanonical(canonical) }) return
-        check(prefs.edit().putString("external_episodes_v1", Gson().toJson(externalRows)).commit())
+        iptvCache.saveEpisodes(scope, Gson().toJson(externalRows.filter { it.scope == scope }))
+        persistExternalEpisodes()
         externalRevision.value += 1
     }
 
@@ -158,8 +178,17 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
             canonicalVideos[canonicalEpisode]?.takeIf { Regex("[A-Za-z0-9_:.-]+").matches(it) })
         val existing = externalRows.filter { it.scope == row.scope && it.native == native &&
             it.nativeSeason == nativeSeason && it.nativeEpisode == nativeEpisode }
-        if (existing.any { externalCanonical(it.canonical) == externalCanonical(canonical) &&
-            it.canonicalSeason == canonicalSeason && it.canonicalEpisode == canonicalEpisode }) continue
+        val sameEpisode = existing.firstOrNull { externalCanonical(it.canonical) == externalCanonical(canonical) &&
+            it.canonicalSeason == canonicalSeason && it.canonicalEpisode == canonicalEpisode }
+        if (sameEpisode != null) {
+            val replacement = row.copy(alias = sameEpisode.alias, canonicalVideo = row.canonicalVideo ?: sameEpisode.canonicalVideo)
+            if (sameEpisode.nativeVideo != replacement.nativeVideo || sameEpisode.canonicalVideo != replacement.canonicalVideo) {
+                externalRows.remove(sameEpisode)
+                externalRows += replacement
+                changed = true
+            }
+            continue
+        }
         // A numbered-part proof may add an episode alias, never a whole-work alias.
         // Competing primary identities still cannot silently rematch a source episode.
         if (existing.any { !it.alias } && !row.alias) continue
@@ -167,8 +196,8 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         changed = true
         }
         if (!changed) return
-        check(prefs.edit().putString("external_episodes_v1", Gson().toJson(externalRows))
-            .putString("external_canonical_links_v1", Gson().toJson(externalCanonicalLinks)).commit())
+        persistExternalEpisodes()
+        check(prefs.edit().putString("external_canonical_links_v1", Gson().toJson(externalCanonicalLinks)).commit())
         externalRevision.value += 1
     }
     private fun edge(row: ExternalEpisode) = listOf(row.scope, row.native, row.nativeSeason.toString(), row.nativeEpisode.toString())
@@ -222,6 +251,8 @@ class SharedPlaybackIdentity @Inject constructor(@ApplicationContext context: Co
         indexExternal()
         return rowsByTitle[id].orEmpty().any { it.native == id }
     }
+    @Synchronized internal fun hasExternalSeries(baseUrl: String, id: String): Boolean =
+        externalRows.any { it.scope == sourceScope(baseUrl) && it.native == id }
     internal fun isExternalSource(id: String) = isExternalSeries(id) || externalMovies.isNative(id)
 
     @Synchronized internal fun externalQuery(from: String, to: String, season: Int, episode: Int): Pair<Int, Int>? {

@@ -28,7 +28,8 @@ class CatalogRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val api: AddonApi,
     private val layoutPreferenceDataStore: LayoutPreferenceDataStore,
-    private val serverCatalog: ServerCatalog
+    private val serverCatalog: ServerCatalog,
+    private val iptvCache: com.nuvio.tv.data.iptv.IptvIdentityCache? = null
 ) : CatalogRepository {
     companion object {
         private const val TAG = "CatalogRepository"
@@ -87,6 +88,10 @@ class CatalogRepositoryImpl @Inject constructor(
                         com.nuvio.tv.core.poster.patternForScreen(posterPattern, posterScreen, enabledScreens)
                     )
                 items.forEach { previews.put(it.id to it.apiType, it) }
+                // Xtream search can return works outside the requested catalog.
+                if ("search" !in extraArgs && iptvCache != null) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    iptvCache.rememberCatalog(addonBaseUrl, catalogName, items.map { it.id })
+                }
                 Log.d(
                     TAG,
                     "Catalog fetch success addonId=$addonId type=$type catalogId=$catalogId items=${items.size}"

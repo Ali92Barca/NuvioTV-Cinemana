@@ -620,7 +620,7 @@ class MetaRepositoryImpl @Inject constructor(
 
     private fun addonMetaCacheKey(addonBaseUrl: String, type: String, id: String): String {
         val (basePath, baseQuery) = splitAddonBaseUrl(addonBaseUrl)
-        return "$basePath$baseQuery|$type:$id"
+        return "$basePath$baseQuery|$type:$id|${externalBridge?.cacheGeneration ?: 0L}"
     }
 
     /**
@@ -682,7 +682,7 @@ class MetaRepositoryImpl @Inject constructor(
      * for as "tv" and as "series" shares an entry instead of taking two.
      */
     private fun metaLookupCacheKey(type: String, id: String): String =
-        "${inferCanonicalType(type.trim(), id).lowercase()}:$id"
+        "${inferCanonicalType(type.trim(), id).lowercase()}:$id|${externalBridge?.cacheGeneration ?: 0L}"
 
     /**
      * Installed, enabled addons. Waits up to [INSTALLED_ADDONS_WAIT_MS] for a real

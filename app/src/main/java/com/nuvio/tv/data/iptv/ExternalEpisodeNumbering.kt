@@ -15,12 +15,11 @@ internal object ExternalEpisodeNumbering {
         val offset = if (sorted.first() == 1) 0 else {
             var preceding = 0
             for (previous in 1 until season) {
-                val before = canonical[previous].orEmpty()
                 val source = native[previous].orEmpty()
-                if (before.isEmpty() || before != (1..before.size).toSet() ||
-                    source.size != before.size || source.distinct().size != source.size ||
-                    (source.toSet() != before && source.toSet() != before.map { it + preceding }.toSet())) return null
-                preceding += before.size
+                val local = (1..source.size).toSet()
+                if (source.isEmpty() || source.distinct().size != source.size ||
+                    (source.toSet() != local && source.toSet() != local.map { it + preceding }.toSet())) return null
+                preceding += source.size
             }
             preceding.takeIf { it > 0 && sorted.first() == it + 1 } ?: return null
         }
