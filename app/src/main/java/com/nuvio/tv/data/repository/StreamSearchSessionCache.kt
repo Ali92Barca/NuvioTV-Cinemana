@@ -37,6 +37,7 @@ internal class StreamSearchSessionCache(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val completedTtlMs: Long = DEFAULT_COMPLETED_TTL_MS,
+    private val incompleteTtlMs: Long = 30_000L,
     private val maxEntries: Int = DEFAULT_MAX_ENTRIES
 ) {
     private data class Snapshot(
@@ -51,6 +52,8 @@ internal class StreamSearchSessionCache(
         lateinit var job: Job
         @Volatile var invalidated: Boolean = false
         var completedAtMs: Long? = null
+        var expiresAfterMs: Long = 0
+        var sawError: Boolean = false
         var lastSuccessfulResult: NetworkResult.Success<List<AddonStreams>>? = null
     }
 
@@ -60,9 +63,10 @@ internal class StreamSearchSessionCache(
     fun observe(
         key: StreamSearchRequestKey,
         forceRefresh: Boolean,
+        completedSuccessfully: () -> Boolean = { true },
         producer: () -> Flow<NetworkResult<List<AddonStreams>>>
     ): Flow<NetworkResult<List<AddonStreams>>> = flow {
-        val session = acquireSession(key, forceRefresh, producer)
+        val session = acquireSession(key, forceRefresh, completedSuccessfully, producer)
         var emittedVersion = -1L
         emitAll(
             session.state.transformWhile { snapshot ->
@@ -86,6 +90,7 @@ internal class StreamSearchSessionCache(
     private suspend fun acquireSession(
         key: StreamSearchRequestKey,
         forceRefresh: Boolean,
+        completedSuccessfully: () -> Boolean,
         producer: () -> Flow<NetworkResult<List<AddonStreams>>>
     ): Session {
         var created: Session? = null
@@ -99,7 +104,7 @@ internal class StreamSearchSessionCache(
                 sessions[key]?.let { return@withLock it }
             }
 
-            createSession(key, producer).also { session ->
+            createSession(key, completedSuccessfully, producer).also { session ->
                 sessions[key] = session
                 trimToSizeLocked()
                 created = session
@@ -113,6 +118,7 @@ internal class StreamSearchSessionCache(
 
     private fun createSession(
         key: StreamSearchRequestKey,
+        completedSuccessfully: () -> Boolean,
         producer: () -> Flow<NetworkResult<List<AddonStreams>>>
     ): Session {
         val session = Session(
@@ -127,6 +133,7 @@ internal class StreamSearchSessionCache(
         session.job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 producer().collect { result ->
+                    if (result is NetworkResult.Error) session.sawError = true
                     if (result is NetworkResult.Success && result.data.isNotEmpty()) {
                         session.lastSuccessfulResult = result
                     }
@@ -141,6 +148,7 @@ internal class StreamSearchSessionCache(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
+                session.sawError = true
                 session.state.update { current ->
                     Snapshot(
                         result = NetworkResult.Error(error.message ?: "Failed to fetch streams"),
@@ -149,13 +157,13 @@ internal class StreamSearchSessionCache(
                     )
                 }
             } finally {
-                completeSession(key, session)
+                completeSession(key, session, completedSuccessfully())
             }
         }
         return session
     }
 
-    private suspend fun completeSession(key: StreamSearchRequestKey, session: Session) {
+    private suspend fun completeSession(key: StreamSearchRequestKey, session: Session, successful: Boolean) {
         if (session.invalidated) return
         session.state.update { current ->
             val lastSuccess = session.lastSuccessfulResult
@@ -173,6 +181,7 @@ internal class StreamSearchSessionCache(
             if (sessions[key] !== session) return@withLock
             if (session.lastSuccessfulResult != null) {
                 session.completedAtMs = nowMs()
+                session.expiresAfterMs = if (successful && !session.sawError) completedTtlMs else incompleteTtlMs
             } else {
                 sessions.remove(key)
             }
@@ -199,7 +208,7 @@ internal class StreamSearchSessionCache(
         while (iterator.hasNext()) {
             val session = iterator.next().value
             val completedAt = session.completedAtMs ?: continue
-            if (now - completedAt >= completedTtlMs) {
+            if (now - completedAt >= session.expiresAfterMs) {
                 iterator.remove()
                 session.cancelAndComplete()
             }

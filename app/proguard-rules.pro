@@ -19,6 +19,19 @@
 -keep class com.google.gson.reflect.TypeToken { *; }
 -keep class * extends com.google.gson.reflect.TypeToken
 
+# Persisted JSON must retain its schema across debug/release and future updates.
+# These internal storage records are outside the DTO/domain keep rules below.
+-keep class com.nuvio.tv.data.repository.SharedPlaybackIdentity$ExternalEpisode { *; }
+-keep class com.nuvio.tv.data.repository.SharedPlaybackIdentity$Stored { *; }
+-keep class com.nuvio.tv.data.repository.ExternalMovieIdentity { *; }
+-keep class com.nuvio.tv.core.sync.PendingProgressUpsert { *; }
+-keep class com.nuvio.tv.core.sync.PendingWatchedUpsert { *; }
+-keep class com.nuvio.tv.core.sync.ProgressDeleteVersion { *; }
+-keep class com.nuvio.tv.core.sync.WatchedDeleteVersion { *; }
+-keep class com.nuvio.tv.data.builtincache.BuiltinDetailsStore$EpisodeKey { *; }
+-keep class com.nuvio.android.cinemana.CinemanaTmdbMatcher$Resolution { *; }
+-keep class com.nuvio.android.cinemana.CinemanaTmdbMatcher$Match { *; }
+
 # ── Retrofit ───────────────────────────────────────────────────────────────────
 # Keep generic signatures for Retrofit service methods
 -keepattributes Signature

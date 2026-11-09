@@ -46,4 +46,6 @@ Compare debug performance only against earlier debug builds, and official/releas
 
 # Test 12 authorization
 
+Post-Test12 owner scope: fix incomplete stream/source recovery first, then prepare a full registered-service Release candidate and install/test on CBOX. Measure the currently installed official Release before replacing it; compare Release only to Release under matching conditions, preserve signing compatibility and all data. Home/navigation work is explicitly deferred. Publication is conditional on the owner's later trial and approval; do not publish a Release/tag or modify main/upstream now. Test12 was delivered; never reuse its number for changed debug code.
+
 The owner explicitly approved implementing the entire reviewed fix package and building one comprehensive Test 12 after completing the combined changes and tests. Test 11 was delivered and installed; never reuse number11. Keep movie-name search and cosmetic player labels out of scope. Correct watched delta event order, protect newer local decisions from stale sync acknowledgements/pulls, preserve canonical episode/profiles/extra-episode behavior, reduce repeated history work and Home UI-thread load, and verify progressive links and metadata caching. Complete local checks before pushing because a push can start APK CI. Preserve account/service configuration and device data.

@@ -1,0 +1,95 @@
+name: Better Stream full release candidate
+on:
+  workflow_dispatch:
+  push:
+    branches: [experimental/betterstream-tmdb]
+    paths:
+      - '.github/workflows/betterstream-release-candidate.yml'
+      - 'app/**'
+      - 'gradle.properties'
+      - 'scripts/configure-services.py'
+permissions:
+  contents: read
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release-candidate]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Configure registered services
+        env:
+          REQUIRE_REGISTRATIONS: 'true'
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+          TRAKT_REDIRECT_URI: ${{ secrets.TRAKT_REDIRECT_URI }}
+          SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          NUVIO_SUPABASE_URL: ${{ secrets.NUVIO_SUPABASE_URL }}
+          NUVIO_SUPABASE_ANON_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
+          NUVIO_SUPABASE_FALLBACK_URL: ${{ secrets.NUVIO_SUPABASE_FALLBACK_URL }}
+        run: python3 scripts/configure-services.py local.properties
+      - name: Generate and verify full debug configuration
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:generateFullDebugBuildConfig --no-daemon
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          text = next(Path('app/build/generated/source/buildConfig').rglob('BuildConfig.java')).read_text()
+          required = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'TRAKT_CLIENT_ID', 'SIMKL_CLIENT_ID', 'TMDB_API_KEY']
+          for key in required:
+              match = re.search(r'\b' + key + r'\s*=\s*"([^"]*)"', text)
+              if not match or not match[1].strip():
+                  raise SystemExit('Missing generated service configuration: ' + key)
+              print(key + ': configured')
+          PY
+      - name: Test source recovery and all integrations
+        run: |
+          ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.android.cinemana.CinemanaStreamConcurrencyTest' --tests 'com.nuvio.android.cinemana.CinemanaEditionResolutionTest' --tests 'com.nuvio.android.cinemana.CinemanaEpisodeMappingRegressionTest' --tests 'com.nuvio.tv.ui.components.BuiltinCatalogPosterTest' --tests 'com.nuvio.tv.ui.components.ProgressiveIptvPosterTest' --tests 'com.nuvio.tv.data.iptv.*' --tests 'com.nuvio.tv.data.repository.StreamRepositoryPluginIsolationTest' --tests 'com.nuvio.tv.data.repository.StreamRequestRecoveryTest' --tests 'com.nuvio.tv.data.repository.StreamSearchSessionCacheTest' --tests 'com.nuvio.tv.data.repository.MetaRepositoryAddonCacheTest' --tests 'com.nuvio.tv.data.repository.SharedPlaybackIdentityTest' --tests 'com.nuvio.tv.data.repository.SharedMetadataRequestTest' --tests 'com.nuvio.tv.data.repository.HistoryProjectionCacheTest' --tests 'com.nuvio.tv.core.sync.WatchState*Test' --tests 'com.nuvio.tv.core.sync.WatchedDeltaReconciliationTest' --tests 'com.nuvio.tv.data.local.WatchedItems*Test' --tests 'com.nuvio.tv.data.local.WatchProgressPreferencesStorageTest' --tests 'com.nuvio.tv.ui.screens.home.ContinueWatching*Test' --tests 'com.nuvio.tv.ui.screens.home.WatchedSeriesBadgeReconciliationTest' --tests 'com.nuvio.tv.ui.screens.detail.EpisodeWatchedProjectionTest' --tests 'com.nuvio.tv.ui.screens.player.PlayerDisplayIdentityTest' --tests 'com.nuvio.tv.data.local.WatchedSeriesStateHolderProfileTest' --tests 'com.nuvio.tv.data.repository.WatchProgressRepositoryProfileIsolationTest' --tests 'com.nuvio.tv.data.repository.TraktAuthServiceTest' --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
+      - name: Build full signed Release candidate without publishing
+        env:
+          MOBILE_KEYSTORE_BASE64: ${{ secrets.MOBILE_KEYSTORE_BASE64 }}
+          NUVIO_RELEASE_STORE_PASSWORD: ${{ secrets.MOBILE_STORE_PASSWORD }}
+          NUVIO_RELEASE_KEY_ALIAS: ${{ secrets.MOBILE_KEY_ALIAS }}
+          NUVIO_RELEASE_KEY_PASSWORD: ${{ secrets.MOBILE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export NUVIO_RELEASE_STORE_FILE="$RUNNER_TEMP/candidate-release.jks"
+          python3 scripts/prepare-signing.py
+          ./gradlew :app:assembleFullRelease --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process -Dorg.gradle.jvmargs='-Xmx5g -Dfile.encoding=UTF-8'
+          apk=app/build/outputs/apk/full/release/app-full-universal-release.apk
+          python3 scripts/verify-release-certificate.py "$apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/candidate-certificate.txt"
+          grep -F '37414d95f3cee4bb8395f8fa294aaa2471c1f5113c6c2e92559ca18f9a26eff4' "$RUNNER_TEMP/candidate-certificate.txt"
+          python3 scripts/verify-betterstream-release.py "$apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BetterStream-full-release-candidate
+          path: app/build/outputs/apk/full/release/app-full-universal-release.apk
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: BetterStream-service-test-results
+          path: app/build/test-results/testFullDebugUnitTest/*.xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BetterStream-release-verification
+          path: |
+            app/build/outputs/mapping/fullRelease/mapping.txt
+            release-candidate-verification.json
+          if-no-files-found: error
+      - name: Remove temporary service properties
+        if: always()
+        run: rm -f local.properties local.dev.properties "$RUNNER_TEMP/candidate-release.jks" "$RUNNER_TEMP/candidate-certificate.txt"

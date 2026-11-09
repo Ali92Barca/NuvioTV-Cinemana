@@ -38,6 +38,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import okhttp3.ResponseBody.Companion.toResponseBody
 import retrofit2.Response
 
 class StreamRepositoryPluginIsolationTest {
@@ -98,8 +99,48 @@ class StreamRepositoryPluginIsolationTest {
         val ready = withTimeout(3000) { harness.repository.getStreamsFromAllAddons("series", "tt101:1:1", 1, 1)
             .first { it is NetworkResult.Success } } as NetworkResult.Success
         assertEquals("https://stream.example/replacement.m3u8", ready.data.single().streams.single().url)
-        coVerify(exactly = 1) { harness.api.getStreams(match { it.contains("xt_s_src_42") }) }
+        coVerify(exactly = 2) { harness.api.getStreams(match { it.contains("xt_s_src_42") }) }
         coVerify(exactly = 1) { harness.api.getStreams(match { it.contains("xt_s_src_43") }) }
+    }
+
+    @Test fun `empty verified native episode recovers without refreshing successful sources or metadata`() = runBlocking {
+        val addon = compatibleAddon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("tt", "xt_"))))
+        val identities = mockk<SharedPlaybackIdentity> {
+            every { externalEpisodeSources(addon.baseUrl, "tt38282411", 2, 2) } returns listOf("xt_s_src_42:2:20")
+        }
+        val harness = newHarness(emptyList(), addon, identities = identities)
+        var nativeCalls = 0
+        coEvery { harness.api.getStreams(match { it.contains("xt_s_src_42") }) } coAnswers {
+            Response.success(StreamResponseDto(if (++nativeCalls == 1) emptyList() else
+                listOf(StreamDto(url = "https://stream.example/recovered.m3u8"))))
+        }
+        val ready = withTimeout(3000) {
+            harness.repository.getStreamsFromAllAddons("series", "tt38282411:2:2", 2, 2).first { it is NetworkResult.Success }
+        } as NetworkResult.Success
+        assertEquals("https://stream.example/recovered.m3u8", ready.data.single().streams.single().url)
+        assertEquals(2, nativeCalls)
+        coVerify(exactly = 0) { harness.api.getMeta(any()) }
+        coVerify(exactly = 0) { harness.api.getCatalog(any()) }
+        coVerify(exactly = 0) { harness.api.getStreams(match { it.contains("tt38282411") }) }
+    }
+
+    @Test fun `recovering one source keeps sibling links visible without requesting them again`() = runBlocking {
+        val fast = compatibleAddon()
+        val recovering = fast.copy(id = "recovering", name = "Recovering", baseUrl = "https://recovering.example")
+        val harness = newHarness(emptyList(), fast)
+        every { harness.addonRepository.getInstalledAddons() } returns flowOf(listOf(fast, recovering))
+        var retryCalls = 0
+        coEvery { harness.api.getStreams(match { it.startsWith(recovering.baseUrl) }) } coAnswers {
+            if (++retryCalls == 1) Response.error(503, "temporary".toResponseBody()) else
+                Response.success(StreamResponseDto(listOf(StreamDto(url = "https://stream.example/recovered.m3u8"))))
+        }
+        val snapshots = withTimeout(3000) {
+            harness.repository.getStreamsFromAllAddons("movie", "tt123", null, null).toList()
+        }.filterIsInstance<NetworkResult.Success<List<AddonStreams>>>()
+        assertEquals(listOf(fast.displayName), snapshots.first().data.map { it.addonName })
+        assertEquals(setOf(fast.displayName, recovering.displayName), snapshots.last().data.map { it.addonName }.toSet())
+        coVerify(exactly = 1) { harness.api.getStreams(match { it.startsWith(fast.baseUrl) }) }
+        assertEquals(2, retryCalls)
     }
 
     private fun seriesCanonical() = mockk<com.nuvio.tv.domain.model.Meta> {

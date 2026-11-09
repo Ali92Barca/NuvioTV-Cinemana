@@ -65,6 +65,7 @@ class StreamRepositoryImpl @Inject constructor(
     private val metaRepository: com.nuvio.tv.domain.repository.MetaRepository
 ) : StreamRepository {
     private val streamSearchSessions = StreamSearchSessionCache()
+    private val streamRequestRecovery = StreamRequestRecovery()
     private val localPluginSearchPaused = MutableStateFlow(false)
 
     override fun setLocalPluginSearchPaused(paused: Boolean) {
@@ -103,11 +104,13 @@ class StreamRepositoryImpl @Inject constructor(
         val sourceConfiguration = captureSourceConfiguration()
         val isNativeServerRequest = serverStreams.isNativeRequest(videoId)
         val requestKey = buildStreamSearchRequestKey(sourceConfiguration, type, parentMetaId?.let { "$it|$videoId" } ?: videoId, season, episode)
+        val incomplete = java.util.concurrent.atomic.AtomicBoolean()
 
         emitAll(
             streamSearchSessions.observe(
                 key = requestKey,
-                forceRefresh = forceRefresh
+                forceRefresh = forceRefresh,
+                completedSuccessfully = { !incomplete.get() }
             ) {
                 fetchStreamsFromAllSources(
                     type = type,
@@ -120,7 +123,8 @@ class StreamRepositoryImpl @Inject constructor(
                     hasCompatiblePlugins = !isNativeServerRequest &&
                         sourceConfiguration.pluginsEnabled &&
                         sourceConfiguration.enabledScrapers.any { scraper -> scraper.supportsType(type) },
-                    serverSources = serverStreams.sources(type, videoId, season, episode, forceRefresh)
+                    serverSources = serverStreams.sources(type, videoId, season, episode, forceRefresh),
+                    onIncomplete = { incomplete.set(true) }
                 )
             }
         )
@@ -194,7 +198,8 @@ class StreamRepositoryImpl @Inject constructor(
         addons: List<Addon>,
         debridSettings: DebridSettings,
         hasCompatiblePlugins: Boolean,
-        serverSources: List<ServerStreamSource>
+        serverSources: List<ServerStreamSource>,
+        onIncomplete: () -> Unit
     ): Flow<NetworkResult<List<AddonStreams>>> = kotlinx.coroutines.flow.channelFlow {
         val requestStarted = android.os.SystemClock.elapsedRealtime()
         val timingSequence = streamTimingSequence.incrementAndGet()
@@ -230,6 +235,7 @@ class StreamRepositoryImpl @Inject constructor(
                 streamAddons.forEachIndexed { sourceIndex, addon ->
                     launch {
                         val addonScope = this
+                        val retryBudget = StreamRequestRecovery.Budget()
                         val nativeRequests = mutableListOf<kotlinx.coroutines.Deferred<List<Stream>>>()
                         val emittedKeys = mutableSetOf<String>()
                         var firstPublished = false
@@ -258,7 +264,10 @@ class StreamRepositoryImpl @Inject constructor(
                             if (!addon.supportsStreamResource(type, nativeId) || !scheduledIds.add(nativeId)) return
                             nativeRequests += addonScope.async {
                                 try {
-                                    val streams = (getStreamsFromAddon(addon, type, nativeId)
+                                    val streams = (streamRequestRecovery.request(retryBudget,
+                                        retryEmpty = { streams: List<Stream> -> streams.isEmpty() }) {
+                                        getStreamsFromAddon(addon, type, nativeId)
+                                    }
                                         as? NetworkResult.Success<List<Stream>>)?.data.orEmpty()
                                     publishAvailable(streams)
                                     streams
@@ -279,7 +288,9 @@ class StreamRepositoryImpl @Inject constructor(
                                 externalAddonBridge.cachedSeriesIds(addon, requestedId, season, episode) else emptyList()
                             knownSeriesIds.forEach(::enqueueNative)
                             val directResult = if (!(searchNative && type == "series") && addon.supportsStreamResource(type, requestedId)) {
-                                getStreamsFromAddon(addon, type, requestedId)
+                                streamRequestRecovery.request(retryBudget) {
+                                    getStreamsFromAddon(addon, type, requestedId)
+                                }
                             } else NetworkResult.Success(emptyList<Stream>())
                             if (directResult is NetworkResult.Success) publishAvailable(directResult.data)
                             val needsSearch = (directResult is NetworkResult.Success && directResult.data.isEmpty()) ||
@@ -486,6 +497,9 @@ class StreamRepositoryImpl @Inject constructor(
                 finishDebridUpdatesIfReady()
                 debridWorker.join()
             }
+            // A successful sibling source must not turn an incomplete search into a
+            // fully reusable 15-minute session. Keep its links briefly for navigation.
+            if (attemptedFailures.isNotEmpty()) onIncomplete()
             // Emit final result (even if empty)
             if (accumulatedResults.isEmpty()) {
                 val errorMessage = buildAggregateFailureMessage(
@@ -502,6 +516,7 @@ class StreamRepositoryImpl @Inject constructor(
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            onIncomplete()
             Log.e(TAG, "Failed to fetch streams: ${e.message}", e)
             send(NetworkResult.Error(e.message ?: context.getString(com.nuvio.tv.R.string.stream_error_fetch_failed)))
         }
