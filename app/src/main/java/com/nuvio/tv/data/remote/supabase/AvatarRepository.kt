@@ -34,6 +34,15 @@ private const val MemberAvatarBucket = "membership-profile-avatars"
 private const val MemberAvatarTag = "MemberAvatars"
 private const val AvatarCatalogRefreshIntervalMs = 15 * 60_000L
 
+internal fun resolveAvatarImageUrl(storagePath: String, publicBaseUrl: String?, backendUrl: String): String {
+    val path = storagePath.trim()
+    if (path.startsWith("http://") || path.startsWith("https://")) return path
+    val base = publicBaseUrl?.trim()?.trimEnd('/')?.takeIf(String::isNotBlank)
+        ?: backendUrl.trim().trimEnd('/').takeIf(String::isNotBlank)
+            ?.let { "$it/storage/v1/object/public/avatars" }
+    return if (base != null) "$base/${path.trimStart('/')}" else path
+}
+
 internal fun isAvatarCatalogRefreshDue(lastRefreshAtMs: Long, nowMs: Long): Boolean {
     return lastRefreshAtMs <= 0L ||
         nowMs < lastRefreshAtMs ||
@@ -290,9 +299,7 @@ class AvatarRepository @Inject constructor(
         )
 
     private fun avatarImageUrl(storagePath: String): String {
-        if (storagePath.startsWith("http://") || storagePath.startsWith("https://")) return storagePath
-        val baseUrl = serverConfiguration.avatarPublicBaseUrl.orEmpty().trimEnd('/')
-        return if (baseUrl.isNotEmpty()) "$baseUrl/$storagePath" else storagePath
+        return resolveAvatarImageUrl(storagePath, serverConfiguration.avatarPublicBaseUrl, serverConfiguration.backendUrl)
     }
 
     private suspend fun cacheMemberAvatar(item: SupabaseMemberAvatarCatalogItem): File = withContext(Dispatchers.IO) {

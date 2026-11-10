@@ -33,6 +33,12 @@ public final class ExternalMatcherProbe {
         Method variants = find(matcher, "titleVariants", 1);
         variants.invoke(instance, mixed);
         System.out.println("PASS Android bilingual title extraction");
+        String manaa = "\u0645\u0646\u0627\u0639\u0629";
+        Object queries = find(matcher, "searchTitles", 1).invoke(instance, manaa);
+        if (!(queries instanceof List) || !manaa.equals(((List<?>) queries).get(0)))
+            throw new AssertionError("Arabic search spelling was changed");
+        find(matcher, "searchTitles", 1).invoke(instance, mixed);
+        System.out.println("PASS Android original Arabic search spelling");
         Class<?> candidate = Class.forName(matcher.getName() + "$Candidate", true, loader);
         java.lang.reflect.Constructor<?> ctor = candidate.getDeclaredConstructor(String.class, String.class, Integer.class, String.class, String.class);
         Object translated = ctor.newInstance("xt_s_probe_1", mixed, Integer.valueOf(2024), null, null);

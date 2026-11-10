@@ -36,6 +36,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emitAll
@@ -110,7 +111,8 @@ class StreamRepositoryImpl @Inject constructor(
             streamSearchSessions.observe(
                 key = requestKey,
                 forceRefresh = forceRefresh,
-                completedSuccessfully = { !incomplete.get() }
+                completedSuccessfully = { !incomplete.get() },
+                stopWhenUnobserved = true
             ) {
                 fetchStreamsFromAllSources(
                     type = type,
@@ -223,6 +225,7 @@ class StreamRepositoryImpl @Inject constructor(
             val accumulatedResults = mutableListOf<AddonStreams>()
             val resultsMutex = kotlinx.coroutines.sync.Mutex()
 
+            val nativeStreamLimit = kotlinx.coroutines.sync.Semaphore(2)
             coroutineScope {
                 // Channel to receive results as they complete
                 val resultChannel = Channel<AddonStreams>(Channel.UNLIMITED)
@@ -262,7 +265,7 @@ class StreamRepositoryImpl @Inject constructor(
                         val scheduledIds = mutableSetOf<String>()
                         fun enqueueNative(nativeId: String) {
                             if (!addon.supportsStreamResource(type, nativeId) || !scheduledIds.add(nativeId)) return
-                            nativeRequests += addonScope.async {
+                            nativeRequests += addonScope.async { nativeStreamLimit.withPermit {
                                 try {
                                     val streams = (streamRequestRecovery.request(retryBudget,
                                         retryEmpty = { streams: List<Stream> -> streams.isEmpty() }) {
@@ -273,7 +276,7 @@ class StreamRepositoryImpl @Inject constructor(
                                     streams
                                 } catch (cancelled: CancellationException) { throw cancelled }
                                 catch (_: Exception) { emptyList() }
-                            }
+                            } }
                         }
                         try {
                             val requestedId = externalAddonBridge.streamRequestId(addon, type,
@@ -298,10 +301,7 @@ class StreamRepositoryImpl @Inject constructor(
                             // The verified original episode can be fetched without waiting for
                             // metadata/title matching. If it no longer supplies a link, fall back
                             // to the normal search instead of trapping the user in a stale cache.
-                            val knownSeriesStreams = if (knownSeriesIds.isNotEmpty()) nativeRequests.flatMap { it.await() } else emptyList()
-                            val streamsResult = if (knownSeriesStreams.isNotEmpty()) {
-                                NetworkResult.Success(((directResult as? NetworkResult.Success<List<Stream>>)?.data.orEmpty() + knownSeriesStreams).distinctBy { it.dedupKey() })
-                            } else if ((needsSearch || searchNative) &&
+                            val streamsResult = if ((needsSearch || searchNative) &&
                                 externalAddonBridge.supports(addon, type)) {
                                 val contentId = parentMetaId ?: if (type == "series" && season != null && episode != null)
                                     videoId.removeSuffix(":$season:$episode") else videoId
@@ -313,7 +313,9 @@ class StreamRepositoryImpl @Inject constructor(
                                     }
                                 if (com.nuvio.tv.BuildConfig.DEBUG) Log.d(TAG, "External native search type=$type metadata=${canonical != null} season=$season episode=$episode")
                                 if (canonical == null) {
-                                    if (searchNative && type == "series") NetworkResult.Success(emptyList()) else directResult
+                                    val knownSeriesStreams = nativeRequests.flatMap { it.await() }
+                                    if (knownSeriesStreams.isNotEmpty()) NetworkResult.Success(knownSeriesStreams)
+                                    else if (searchNative && type == "series") NetworkResult.Success(emptyList()) else directResult
                                 } else {
                                     val nativeIds = externalAddonBridge.resolveAll(addon, type, canonical, season, episode) { enqueueNative(it) }
                                     nativeIds.forEach(::enqueueNative)

@@ -16,6 +16,86 @@ import org.junit.Test
 import retrofit2.Response
 
 class ExternalAddonBridgeTest {
+    @Test fun arabicWorkLearnsAndPersistsEveryEpisodeWithoutTranslatedEditionEvidence() = runBlocking {
+        org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
+        val source = seriesAddon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("xt_"))))
+        val native = MetaDto("xt_s_src_41576", "series", "مناعة", tmdbId = "302770", videos = (1..15).map {
+            VideoDto("xt_s_src_41576:1:$it", title = "AR - مناعة - S01E$it", season = 1, episode = it)
+        }).toDomain("Episode")
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        every { identities.entries } returns kotlinx.coroutines.flow.MutableStateFlow<List<PlaybackIdentity>>(emptyList())
+        every { identities.withWatchIdentity(any(), any()) } answers { firstArg() }
+        val cache = mockk<IptvIdentityCache>(relaxed = true) {
+            every { work(source.baseUrl, native.id) } returns null
+        }
+        val tmdb = mockk<TmdbApi>()
+        coEvery { tmdb.getTvDetails(302770, any(), any()) } returns Response.success(TmdbDetailsResponse(302770, name = "مناعة", originalLanguage = "ar"))
+        coEvery { tmdb.getTvExternalIds(302770, any()) } returns Response.success(TmdbExternalIdsResponse(302770, imdbId = "tt39713912"))
+        coEvery { tmdb.getTvSeasonDetails(302770, 1, any(), any()) } returns Response.success(
+            com.nuvio.tv.data.remote.api.TmdbSeasonResponse(1, (1..15).map { com.nuvio.tv.data.remote.api.TmdbEpisode(it, name = "الحلقة $it") }))
+        val result = ExternalAddonBridge(api, tmdb, identities, cache).enrichNative(source, native)
+        assertTrue(result.sharedProgressCompatible)
+        assertEquals(15, result.verifiedPlaybackVideoIds?.size)
+        verify { identities.learnExternalSeason(source.baseUrl, native.id, "tt39713912", 1, 1, match { it.size == 15 }, any(), any()) }
+        verify { cache.rememberLayout(source.baseUrl, native.id, any(), any(), match { it.size == 15 }) }
+    }
+    @Test fun progressiveDiscoveryVisitsEveryEditionPastTheFormerGlobalDeadline() = kotlinx.coroutines.test.runTest {
+        val canonical = canonical()
+        every { canonical.videos } returns episodes()
+        coEvery { api.getCatalog(any()) } returns Response.success(CatalogResponseDto((1..13).map {
+            MetaPreviewDto("xt_s_src_$it", "series", "Example", releaseInfo = "2020")
+        }))
+        coEvery { api.getMeta(any()) } coAnswers {
+            kotlinx.coroutines.delay(3_000)
+            val id = firstArg<String>().substringAfter("/meta/series/").substringBefore(".json")
+            Response.success(MetaResponseDto(MetaDto(id, "series", "Example", videos = (1..2).map {
+                VideoDto("$id:1:$it", title = "Episode $it", season = 1, episode = it)
+            })))
+        }
+        val published = mutableListOf<String>()
+        val result = bridge.resolveAll(seriesAddon(), "series", canonical, 1, 1) { published += it }
+        assertEquals(13, result.size)
+        assertEquals(result, published)
+        assertTrue(result.contains("xt_s_src_13:1:1"))
+    }
+    @Test fun episodeTitleIgnoresEditionPrefixOnlyAfterCheckingNativeCoordinate() {
+        val expected = episodes(title = "Winter Is Coming").first().copy(title = "Winter Is Coming", released = "2011-04-17")
+        val native = VideoDto("xt_s_src_4768:1:1", title = "4K-AR - Game of Thrones (2011) (US) - S01E01 - Winter Is Coming",
+            season = 1, episode = 1)
+        assertTrue(bridge.compatible(expected, native, false, 10))
+        assertFalse(bridge.compatible(expected, native.copy(title = native.title!!.replace("S01E01", "S01E02")), false, 10))
+        assertFalse(bridge.compatible(expected, native.copy(title = native.title!!.replace("Winter Is Coming", "The Kingsroad")), false, 10))
+        assertFalse(bridge.compatible(expected, native.copy(released = "2011-04-24"), false, 10))
+    }
+
+    @Test fun localizedEnglishEditionLearnsAllVerifiedEpisodesOncePerSeason() = runBlocking {
+        org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
+        val source = seriesAddon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("xt_"))))
+        val native = MetaDto("xt_s_src_4768", "series", "Game of Thrones", tmdbId = "1399", videos = (1..10).map {
+            VideoDto("xt_s_src_4768:1:$it", title = "4K-AR - Game of Thrones - S01E$it - Original title $it", season = 1, episode = it)
+        }).toDomain("Episode")
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
+        every { identities.entries } returns kotlinx.coroutines.flow.MutableStateFlow<List<PlaybackIdentity>>(emptyList())
+        every { identities.withWatchIdentity(any(), any()) } answers { firstArg() }
+        val cache = mockk<IptvIdentityCache>(relaxed = true) {
+            every { work(source.baseUrl, native.id) } returns null
+        }
+        val tmdb = mockk<TmdbApi>()
+        coEvery { tmdb.getTvDetails(1399, any(), any()) } returns Response.success(TmdbDetailsResponse(1399, name = "صراع العروش", originalLanguage = "en"))
+        coEvery { tmdb.getTvExternalIds(1399, any()) } returns Response.success(TmdbExternalIdsResponse(1399, imdbId = "tt0944947"))
+        coEvery { tmdb.getTvSeasonDetails(1399, 1, any(), any()) } coAnswers {
+            val english = arg<String>(3) == "en-US"
+            Response.success(com.nuvio.tv.data.remote.api.TmdbSeasonResponse(1, (1..10).map {
+                com.nuvio.tv.data.remote.api.TmdbEpisode(it, name = if (english) "Original title $it" else "الحلقة الأصلية $it", airDate = "2011-04-17")
+            }))
+        }
+        val result = ExternalAddonBridge(api, tmdb, identities, cache).enrichNative(source, native)
+        assertTrue(result.sharedProgressCompatible)
+        assertEquals(10, result.verifiedPlaybackVideoIds?.size)
+        coVerify(exactly = 1) { tmdb.getTvSeasonDetails(1399, 1, any(), "en-US") }
+        verify { identities.learnExternalSeason(source.baseUrl, native.id, "tt0944947", 1, 1,
+            match { it.size == 10 && it.first() == Triple(1, "xt_s_src_4768:1:1", 1) }, any(), any()) }
+    }
     @Test fun incompleteSeasonResponseDoesNotRevokeAnEstablishedDurableWork() = runBlocking {
         org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
         val source = addon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("xt_"))))

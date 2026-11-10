@@ -89,6 +89,18 @@ internal object ExternalAddonTitleMatcher {
     }
 
     /** A bilingual label can carry two complete titles; never use arbitrary substrings. */
+    internal fun searchTitles(value: String): List<String> {
+        // Search services do not necessarily normalize Arabic letters as we do. Keep the
+        // original spelling (مناعة, not مناعه) and bilingual aliases in outbound queries.
+        val arabic = "\\u0600-\\u06FF\\u0750-\\u077F\\u0870-\\u08FF"
+        val latin = "a-zA-Z\\u00C0-\\u024F\\u1E00-\\u1EFF"
+        val aliases = listOf(value.trim()) + listOf(arabic, latin).flatMap { script ->
+            Regex("[$script\\p{N}]+(?:\\s+[$script\\p{N}]+)*").findAll(value)
+                .map { it.value }.filter { it.length >= 4 }.toList()
+        }
+        return aliases.filter(String::isNotBlank).distinctBy(::normalize)
+    }
+
     internal fun titleVariants(value: String): Set<String> {
         val normalized = normalize(value)
         // Android uses ICU regex, which rejects the JVM-only IsArabic/IsLatin aliases.

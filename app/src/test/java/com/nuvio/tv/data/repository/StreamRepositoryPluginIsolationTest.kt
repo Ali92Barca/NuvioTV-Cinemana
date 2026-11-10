@@ -99,7 +99,9 @@ class StreamRepositoryPluginIsolationTest {
         val ready = withTimeout(3000) { harness.repository.getStreamsFromAllAddons("series", "tt101:1:1", 1, 1)
             .first { it is NetworkResult.Success } } as NetworkResult.Success
         assertEquals("https://stream.example/replacement.m3u8", ready.data.single().streams.single().url)
-        coVerify(exactly = 2) { harness.api.getStreams(match { it.contains("xt_s_src_42") }) }
+        // A ready replacement may now arrive before the empty cached edition's retry;
+        // leaving the picker cancels that unfinished work instead of waiting for it.
+        coVerify(atMost = 2) { harness.api.getStreams(match { it.contains("xt_s_src_42") }) }
         coVerify(exactly = 1) { harness.api.getStreams(match { it.contains("xt_s_src_43") }) }
     }
 
@@ -141,6 +143,30 @@ class StreamRepositoryPluginIsolationTest {
         assertEquals(setOf(fast.displayName, recovering.displayName), snapshots.last().data.map { it.addonName }.toSet())
         coVerify(exactly = 1) { harness.api.getStreams(match { it.startsWith(fast.baseUrl) }) }
         assertEquals(2, retryCalls)
+    }
+
+    @Test fun `working cached episode does not suppress discovery of additional editions`() = runBlocking {
+        val addon = compatibleAddon().copy(
+            catalogs = listOf(com.nuvio.tv.domain.model.CatalogDescriptor(com.nuvio.tv.domain.model.ContentType.SERIES,
+                id = "search", name = "Search", extra = listOf(com.nuvio.tv.domain.model.CatalogExtra("search")))),
+            resources = listOf(AddonResource("stream", listOf("series"), listOf("tt", "xt_"))))
+        val identities = mockk<SharedPlaybackIdentity>(relaxed = true) {
+            every { externalEpisodeSources(addon.baseUrl, "tt101", 1, 1) } returns listOf("xt_s_src_42:1:1")
+        }
+        val harness = newHarness(emptyList(), addon, seriesCanonical(), identities = identities)
+        coEvery { harness.api.getStreams(match { it.contains("xt_s_src_42") }) } returns Response.success(
+            StreamResponseDto(listOf(StreamDto(url = "https://stream.example/cached.m3u8"))))
+        coEvery { harness.api.getStreams(match { it.contains("xt_s_src_43") }) } returns Response.success(
+            StreamResponseDto(listOf(StreamDto(url = "https://stream.example/additional.m3u8"))))
+        coEvery { harness.api.getCatalog(any()) } returns Response.success(com.nuvio.tv.data.remote.dto.CatalogResponseDto(
+            listOf(com.nuvio.tv.data.remote.dto.MetaPreviewDto("xt_s_src_43", "series", "Series", releaseInfo = "2020"))))
+        coEvery { harness.api.getMeta(any()) } returns nativeMeta("xt_s_src_43")
+        val result = withTimeout(3000) { harness.repository.getStreamsFromAllAddons("series", "tt101:1:1", 1, 1)
+            .first { it is NetworkResult.Success && it.data.flatMap { group -> group.streams }.size == 2 } } as NetworkResult.Success
+        assertEquals(setOf("https://stream.example/cached.m3u8", "https://stream.example/additional.m3u8"),
+            result.data.flatMap { it.streams }.map { it.url }.toSet())
+        coVerify(exactly = 1) { harness.api.getStreams(match { it.contains("xt_s_src_42") }) }
+        coVerify(exactly = 1) { harness.api.getStreams(match { it.contains("xt_s_src_43") }) }
     }
 
     private fun seriesCanonical() = mockk<com.nuvio.tv.domain.model.Meta> {

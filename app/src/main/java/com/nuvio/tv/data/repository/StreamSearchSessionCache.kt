@@ -55,6 +55,7 @@ internal class StreamSearchSessionCache(
         var expiresAfterMs: Long = 0
         var sawError: Boolean = false
         var lastSuccessfulResult: NetworkResult.Success<List<AddonStreams>>? = null
+        var observers: Int = 0
     }
 
     private val mutex = Mutex()
@@ -64,11 +65,12 @@ internal class StreamSearchSessionCache(
         key: StreamSearchRequestKey,
         forceRefresh: Boolean,
         completedSuccessfully: () -> Boolean = { true },
+        stopWhenUnobserved: Boolean = false,
         producer: () -> Flow<NetworkResult<List<AddonStreams>>>
     ): Flow<NetworkResult<List<AddonStreams>>> = flow {
         val session = acquireSession(key, forceRefresh, completedSuccessfully, producer)
         var emittedVersion = -1L
-        emitAll(
+        try { emitAll(
             session.state.transformWhile { snapshot ->
                 if (snapshot.version != emittedVersion) {
                     emittedVersion = snapshot.version
@@ -76,7 +78,18 @@ internal class StreamSearchSessionCache(
                 }
                 !snapshot.isComplete
             }
-        )
+        ) } finally {
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    session.observers--
+                    if (stopWhenUnobserved && session.observers == 0 && session.completedAtMs == null && sessions[key] === session) {
+                        session.cancelAndComplete()
+                        session.completedAtMs = nowMs()
+                        session.expiresAfterMs = incompleteTtlMs
+                    }
+                }
+            }
+        }
     }
 
     /** The streams a search for [key] already holds, without starting one or touching its lifetime. */
@@ -101,10 +114,17 @@ internal class StreamSearchSessionCache(
             if (forceRefresh) {
                 sessions.remove(key)?.cancelAndComplete()
             } else {
-                sessions[key]?.let { return@withLock it }
+                sessions[key]?.let {
+                    if (!it.invalidated) {
+                        it.observers++
+                        return@withLock it
+                    }
+                    sessions.remove(key)
+                }
             }
 
             createSession(key, completedSuccessfully, producer).also { session ->
+                session.observers++
                 sessions[key] = session
                 trimToSizeLocked()
                 created = session

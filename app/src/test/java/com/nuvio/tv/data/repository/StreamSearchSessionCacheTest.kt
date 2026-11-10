@@ -5,12 +5,30 @@ import com.nuvio.tv.domain.model.AddonStreams
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 
 class StreamSearchSessionCacheTest {
+    @Test fun `leaving interactive search cancels outstanding work and preserves ready links`() = runTest {
+        val stopped = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val cache = StreamSearchSessionCache(scope = this)
+        cache.observe(key, false, stopWhenUnobserved = true) {
+            flow {
+                try { emit(ready); kotlinx.coroutines.awaitCancellation() }
+                finally { stopped.complete(Unit) }
+            }
+        }.let { stream -> stream.first { it is NetworkResult.Success } }
+        stopped.await()
+        assertEquals(ready.data, cache.peek(key))
+        var restarted = false
+        cache.observe(key, false, stopWhenUnobserved = true) {
+            flow { restarted = true; emit(ready) }
+        }.toList()
+        assertTrue(restarted)
+    }
     private val key = StreamSearchRequestKey(5, "series", "tt123:2:2", 2, 2, "scoped-config")
     private val ready = NetworkResult.Success(listOf(AddonStreams("ready-source", null, emptyList())))
 

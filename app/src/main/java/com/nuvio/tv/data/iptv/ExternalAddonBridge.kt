@@ -67,6 +67,10 @@ class ExternalAddonBridge @Inject constructor(
     private val nativeEnrichments = object : LinkedHashMap<String, NativeEnrichment>(32, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, NativeEnrichment>?) = size > 32
     }
+    private data class EpisodeNames(val created: Long, val names: Map<Int, String>)
+    private val englishEpisodeNames = object : LinkedHashMap<Pair<Int, Int>, EpisodeNames>(32, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<Int, Int>, EpisodeNames>?) = size > 128
+    }
     fun isXtream(addon: Addon) = addon.resources.any { resource ->
         resource.idPrefixes.orEmpty().any { it.startsWith("xt_") }
     }
@@ -169,12 +173,12 @@ class ExternalAddonBridge @Inject constructor(
         onResolved: (suspend (String) -> Unit)? = null): List<String> {
         withContext(Dispatchers.IO) { identities?.migrateLegacyCache() }
         val accepted = linkedSetOf<String>()
-        return withTimeoutOrNull(25_000) {
+        suspend fun discover(): List<String> {
             if (type == "movie") {
                 val known = (cachedMovieIds(addon, canonical.id) + identities?.externalMovieSources(addon.baseUrl, canonical.tmdbId, canonical.imdbId).orEmpty()).distinct()
                 if (known.isNotEmpty()) {
                     known.forEach { accepted.add(it); onResolved?.invoke(it) }
-                    return@withTimeoutOrNull accepted.toList()
+                    return accepted.toList()
                 }
             }
             val info = info(canonical, type)
@@ -257,7 +261,7 @@ class ExternalAddonBridge @Inject constructor(
                 }
                 val expectedSeason = completeSeason.filter { it.episode in episodeMap }
                 val video = nativeSeasonVideos.singleOrNull { it.episode == episodeMap[episode] } ?: return null
-                if (!compatible(expected, video, relaxed, expectedSeason.size, info.turkish)) return null
+                if (!compatibleEpisode(expected, video, relaxed, expectedSeason.size, info.turkish, info.tmdbId, season)) return null
                 val canonicalId = (if (partParent) canonical.id.takeIf { Regex("cinemana-series:[0-9]+|cee:[0-9]+").matches(it) } else null)
                     ?: info.tmdbId?.takeIf { partParent }?.let { "tmdb:tv:$it" }
                     ?: info.imdbId?.takeIf { Regex("tt[0-9]+").matches(it) }
@@ -268,7 +272,7 @@ class ExternalAddonBridge @Inject constructor(
                         val number = item.episode ?: return@mapNotNull null
                         val nativeNumber = episodeMap[number] ?: return@mapNotNull null
                         val source = nativeSeasonVideos.singleOrNull { it.episode == nativeNumber } ?: return@mapNotNull null
-                        if (compatible(item, source, relaxed, expectedSeason.size, info.turkish)) Triple(nativeNumber, source.id, number) else null
+                        if (compatibleEpisode(item, source, relaxed, expectedSeason.size, info.turkish, info.tmdbId, season)) Triple(nativeNumber, source.id, number) else null
                     }, allowPartAlias = partParent, canonicalVideos = if (canonicalId == canonical.id)
                         expectedSeason.mapNotNull { item -> item.episode?.let { it to item.id } }.toMap() else emptyMap())
                 info.tmdbId?.let { matchCache?.rememberWork(addon.baseUrl, native.id, it, info.imdbId, translatedProof) }
@@ -284,7 +288,9 @@ class ExternalAddonBridge @Inject constructor(
                 val cached = synchronized(searches) { searches[key]?.takeIf { System.nanoTime() - it.created < 300_000_000_000L } }
                 val found = if (cached != null) cached.rows else {
                     val response = try {
-                        api.getCatalog(url(addon, "catalog/${encode(type)}/${encode(catalog.id)}/search=${encode(title)}.json"))
+                        withTimeoutOrNull(10_000) {
+                            api.getCatalog(url(addon, "catalog/${encode(type)}/${encode(catalog.id)}/search=${encode(title)}.json"))
+                        } ?: continue
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { continue }
                     if (!response.isSuccessful) continue
@@ -296,16 +302,16 @@ class ExternalAddonBridge @Inject constructor(
                 if (type != "series") continue
                 val candidates = found.mapNotNull(::candidate).distinct().filter(::matches)
                     .sortedByDescending { ExternalAddonTitleMatcher.titleVariants(it.name).intersect(expectedVariants).size }
-                for (value in candidates.take(12)) {
+                for (value in candidates) {
                     if (!seen.add(value.originalId)) continue
                     val resolved = resolveCandidate(value) ?: continue
                     if (accepted.add(resolved.first)) onResolved?.invoke(resolved.first)
                     // A verified translated edition satisfies the requested Turkish episode.
                     // Do not keep searching foreign/dubbed editions after finding it.
-                    if (onResolved == null && info.turkish && resolved.second) return@withTimeoutOrNull accepted.toList()
+                    if (onResolved == null && info.turkish && resolved.second) return accepted.toList()
                 }
             }
-            if (type == "movie") {
+            return if (type == "movie") {
                 val match = ExternalAddonTitleMatcher.choose(titles.toList(), expectedYear,
                     rows.mapNotNull(::candidate).distinct(), info.imdbId, info.tmdbId)
                     as? ExternalAddonTitleMatcher.Decision.Matched
@@ -315,7 +321,11 @@ class ExternalAddonBridge @Inject constructor(
                     accepted.toList()
                 }
             } else accepted.toList()
-        } ?: accepted.toList() // A slow later candidate must not discard an already verified episode.
+        }
+        // Interactive discovery publishes every ready edition and is cancelled by its caller.
+        // Bound individual requests, rather than truncating the entire result set.
+        return if (onResolved != null) discover()
+            else withTimeoutOrNull(25_000) { discover() } ?: accepted.toList()
     }
 
     internal fun acceptsLayout(originalLanguage: String?, expected: Set<Int>, actual: Set<Int>, aired: Set<Int> = expected) =
@@ -325,11 +335,47 @@ class ExternalAddonBridge @Inject constructor(
         if (actual.id.isBlank()) return false
         if (arabic || turkish) return true
         val name = ExternalAddonTitleMatcher.normalize(actual.title ?: actual.name.orEmpty())
+        val coordinates = Regex("(?:^| )s([0-9]+) ?e([0-9]+)(?: |$)").findAll(name).toList()
+        if (coordinates.isNotEmpty() && (coordinates.size != 1 ||
+                coordinates.single().groupValues[1].toIntOrNull() != actual.season ||
+                coordinates.single().groupValues[2].toIntOrNull() != actual.episode)) return false
+        val episodeName = coordinates.singleOrNull()?.let { name.substring(it.range.last + 1).trim() }
+            ?.takeIf(String::isNotBlank) ?: name
         val expectedName = ExternalAddonTitleMatcher.normalize(expected.title)
         val generic = Regex("(?:^|.* )(?:episode|ep|الحلقه) 0*[0-9]+$")
         val numbered = Regex("(?:^|.* )s[0-9]+ ?e[0-9]+$")
-        if (expectedName.isBlank() || (name != expectedName && !((generic.matches(name) || numbered.matches(name)) && count >= 2))) return false
+        if (expectedName.isBlank() || (episodeName != expectedName && name != expectedName &&
+                !((generic.matches(episodeName) || numbered.matches(name)) && count >= 2))) return false
         return expected.released == null || actual.released == null || expected.released.take(10) == actual.released.take(10)
+    }
+
+    /** Localized episode names are aliases, not different cuts. Only consult the English
+     * alias after the work, season layout and native episode coordinate were validated. */
+    private suspend fun compatibleEpisode(expected: Video, actual: VideoDto, relaxed: Boolean, count: Int,
+        turkish: Boolean, tmdbId: String?, season: Int): Boolean {
+        if (compatible(expected, actual, relaxed, count, turkish)) return true
+        val id = tmdbId?.toIntOrNull()?.takeIf { it > 0 } ?: return false
+        val api = tmdb ?: return false
+        val key = id to season
+        val cached = synchronized(englishEpisodeNames) { englishEpisodeNames[key] }
+        val names = if (cached != null && System.nanoTime() - cached.created <
+            (if (cached.names.isEmpty()) 30_000_000_000L else 300_000_000_000L)) cached.names else {
+            val episodes = try {
+                withTimeoutOrNull(5_000) {
+                    api.getTvSeasonDetails(id, season, BuildConfig.TMDB_API_KEY, "en-US")
+                        .takeIf { it.isSuccessful }?.body()?.episodes
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+            val numbers = episodes.orEmpty().mapNotNull { it.episodeNumber }
+            val found = if (numbers.size == episodes?.size && numbers.all { it > 0 } && numbers.distinct().size == numbers.size)
+                episodes.orEmpty().mapNotNull { e -> e.name?.takeIf(String::isNotBlank)?.let { e.episodeNumber!! to it } }.toMap()
+            else emptyMap()
+            synchronized(englishEpisodeNames) { englishEpisodeNames[key] = EpisodeNames(System.nanoTime(), found) }
+            found
+        }
+        val alternate = names[expected.episode] ?: return false
+        return compatible(expected.copy(title = alternate), actual, relaxed, count, turkish)
     }
 
     /** Learn the inverse direction when a user opens an Xtream catalog title directly. */
@@ -415,7 +461,7 @@ class ExternalAddonBridge @Inject constructor(
             !com.nuvio.tv.data.repository.privateAddonId(native.id) || BuildConfig.TMDB_API_KEY.isBlank()) return native
         return withTimeoutOrNull(25_000) {
             try {
-                val labels = ExternalAddonTitleMatcher.titleVariants(native.name).toList()
+                val labels = ExternalAddonTitleMatcher.searchTitles(native.name)
                 val matcher = com.nuvio.android.cinemana.CinemanaTmdbMatcher(BuildConfig.TMDB_API_KEY)
                 val stored = matchCache?.work(addon.baseUrl, native.id)
                 val nativeLayout = nativeFingerprint(native)
@@ -480,8 +526,9 @@ class ExternalAddonBridge @Inject constructor(
                         if (item == null && !relaxed) continue
                         val video = videos.singleOrNull { it.episode == nativeNumber } ?: continue
                         val canonicalVideo = video.copy(title = item?.name.orEmpty(), released = item?.airDate)
-                        val sourceVideo = VideoDto(video.id, title = video.title, released = video.released, season = season, episode = number)
-                    if (!compatible(canonicalVideo, sourceVideo, relaxed, expectedNumbers.size, turkish)) continue
+                        val sourceVideo = VideoDto(video.id, title = video.title, released = video.released, season = season, episode = video.episode)
+                    if (!compatibleEpisode(canonicalVideo, sourceVideo, relaxed, expectedNumbers.size, turkish,
+                        match.tmdbId.toString(), season)) continue
                         verifiedSeason += Triple(nativeNumber, video.id, number)
                         verified += video.id
                     }
