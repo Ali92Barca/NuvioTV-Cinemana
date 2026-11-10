@@ -11,6 +11,7 @@ import com.nuvio.android.cinemana.CinemanaClient
 import com.nuvio.tv.core.tracking.*
 import com.nuvio.tv.BuildConfig
 import com.nuvio.tv.core.auth.AuthManager
+import com.nuvio.tv.core.network.awaitProviderBody
 import com.nuvio.tv.data.local.ProfileDataStore
 import com.nuvio.tv.domain.model.AuthState
 import com.nuvio.tv.core.profile.ProfileScopedCredentialStore
@@ -78,10 +79,7 @@ class BingersService @Inject constructor(
         }
     }
     private suspend fun httpGetText(url: String): String = withContext(Dispatchers.IO) {
-        http.newCall(Request.Builder().url(url).build()).execute().use {
-            check(it.isSuccessful) { "Provider request failed" }
-            requireNotNull(it.body).string()
-        }
+        http.newCall(Request.Builder().url(url).build()).awaitProviderBody()
     }
     private data class MatcherSettings(val apiKey: String, val language: String = "ar") {
         val enabled get() = apiKey.isNotBlank()

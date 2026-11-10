@@ -3,6 +3,11 @@ package com.nuvio.android.cinemana
 import java.text.Normalizer
 import java.util.Locale
 
+private val marksPattern = Regex("[\\p{M}ـ]")
+private val alefPattern = Regex("[أإآٱ]")
+private val nonTitlePattern = Regex("[^\\p{L}\\p{N}]+")
+private val spacesPattern = Regex("\\s+")
+
 /**
  * Pure normalization for merging Cinemana series/episodes with TMDB metadata.
  * Stream selection must always resolve to [videoId], never a TMDB ID.
@@ -163,9 +168,9 @@ object CinemanaEpisodeMapping {
         normalizeTitle(title) + "|" + (year ?: "")
 
     fun normalizeTitle(title: String): String = Normalizer.normalize(title, Normalizer.Form.NFKD)
-        .replace(Regex("[\\p{M}ـ]"), "")
+        .replace(marksPattern, "")
         .lowercase(Locale.ROOT).replace('ı', 'i')
-        .replace(Regex("[أإآٱ]"), "ا").replace('ى', 'ي').replace('ة', 'ه')
+        .replace(alefPattern, "ا").replace('ى', 'ي').replace('ة', 'ه')
         .map { char ->
             when (char) {
                 in '٠'..'٩' -> '0' + (char - '٠')
@@ -173,8 +178,8 @@ object CinemanaEpisodeMapping {
                 else -> char
             }
         }.joinToString("").replace("&", " and ")
-        .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
-        .replace(Regex("\\s+"), " ")
+        .replace(nonTitlePattern, " ").trim()
+        .replace(spacesPattern, " ")
 
     private fun validId(id: String) = id.isNotBlank() && id.all(Char::isDigit)
 }

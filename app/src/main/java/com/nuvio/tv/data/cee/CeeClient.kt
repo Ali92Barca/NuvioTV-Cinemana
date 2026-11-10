@@ -8,6 +8,8 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 
+private val numericVideoIdPattern = Regex("[0-9]+")
+
 /**
  * Direct Cee API client.
  *
@@ -47,7 +49,7 @@ class CeeClient(
     }
 
     suspend fun homeGroupPage(groupId: String, page: Int = 0): JSONArray {
-        require(groupId.matches(Regex("[0-9]+"))) { "Invalid Cee group ID" }
+        require(groupId.matches(numericVideoIdPattern)) { "Invalid Cee group ID" }
         return JSONArray(
             fetch(
                 "videoListPagination/groupID/$groupId/level/0/itemsPerPage/12/page/${page.coerceAtLeast(0)}"
@@ -78,7 +80,7 @@ class CeeClient(
         val rows = JSONArray(fetch("videoSeason/id/${requireVideoId(rootId)}"))
         return (0 until rows.length()).mapNotNull { index ->
             val item = rows.optJSONObject(index) ?: return@mapNotNull null
-            val id = item.optString("nb").takeIf { it.matches(Regex("[0-9]+")) } ?: return@mapNotNull null
+            val id = item.optString("nb").takeIf { it.matches(numericVideoIdPattern) } ?: return@mapNotNull null
             val root = item.optString("rootSeries")
             if (id != rootId && root != rootId) return@mapNotNull null
             val season = item.optString("season").toIntOrNull() ?: return@mapNotNull null
@@ -125,7 +127,7 @@ class CeeClient(
         )
     }
     private fun requireVideoId(id: String): String {
-        require(id.matches(Regex("[0-9]+"))) {
+        require(id.matches(numericVideoIdPattern)) {
             "Invalid Cee video ID"
         }
         return id

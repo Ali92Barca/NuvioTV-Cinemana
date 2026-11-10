@@ -4,6 +4,12 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.util.Locale
 
+private val numericIdPattern = Regex("[0-9]+")
+private val positiveIdPattern = Regex("[1-9][0-9]*")
+private val marksPattern = Regex("[\\p{M}]")
+private val nonTitlePattern = Regex("[^\\p{L}\\p{N}]+")
+private val spacesPattern = Regex("\\s+")
+
 /**
  * Conservative identity matching for Cee search results.
  * Does not confuse TMDB/IMDb IDs with Cee's internal video IDs.
@@ -67,7 +73,7 @@ internal object CeeResolver {
                 for (i in 0 until rows.length()) {
                     val item = rows.optJSONObject(i) ?: continue
                     val id = item.optString("nb")
-                    if (id.matches(Regex("[0-9]+"))) {
+                    if (id.matches(numericIdPattern)) {
                         candidates.putIfAbsent(id, item)
                     }
                 }
@@ -93,10 +99,10 @@ internal object CeeResolver {
     private fun normalized(value: String?): String =
         value.orEmpty()
             .lowercase(Locale.ROOT)
-            .replace(Regex("[\\p{M}]"), "")
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .replace(marksPattern, "")
+            .replace(nonTitlePattern, " ")
             .trim()
-            .replace(Regex("\\s+"), " ")
+            .replace(spacesPattern, " ")
 
     private fun imdbFrom(value: String?): String? =
         imdbPattern.find(value.orEmpty())?.value?.lowercase(Locale.ROOT)
@@ -206,7 +212,7 @@ internal object CeeResolver {
             if (homeRequests >= 24) break
             val group = homeGroups.optJSONObject(index) ?: continue
             val groupId = group.optString("groupsID")
-            if (!groupId.matches(Regex("[0-9]+"))) continue
+            if (!groupId.matches(numericIdPattern)) continue
 
             // Group previews can be used without another network request.
             val previews = group.optJSONArray("content")
@@ -252,11 +258,11 @@ internal object CeeResolver {
 
         val matches = candidates.mapNotNull { item ->
             val rawId = item.optString("nb")
-                .takeIf { it.matches(Regex("[0-9]+")) }
+                .takeIf { it.matches(numericIdPattern) }
                 ?: return@mapNotNull null
 
             val id = if (query.type == "series") item.optString("rootSeries")
-                .takeIf { it.matches(Regex("[1-9][0-9]*")) } ?: rawId else rawId
+                .takeIf { it.matches(positiveIdPattern) } ?: rawId else rawId
             val kind = item.optString("kind")
             val expectedKind = if (query.type == "series") "2" else "1"
             if (kind != expectedKind) return@mapNotNull null

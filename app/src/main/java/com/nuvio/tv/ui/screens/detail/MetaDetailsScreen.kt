@@ -92,6 +92,7 @@ import androidx.compose.ui.state.ToggleableState
 import com.nuvio.tv.R
 import com.nuvio.tv.ui.util.dpadVerticalFastScroll
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -473,9 +474,14 @@ fun MetaDetailsScreen(
 ) {
     val playbackAvailability = LocalPlaybackAvailability.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    LaunchedEffect(uiState.meta?.id, uiState.meta?.imdbId) {
-        delay(1_000)
-        viewModel.prefetchMovieStreams(uiState.meta)
+    val prefetchInput = remember { kotlinx.coroutines.flow.MutableStateFlow(0L) }
+    val prefetchLifecycle = LocalLifecycleOwner.current
+    LaunchedEffect(uiState.meta?.id, uiState.meta?.imdbId, prefetchLifecycle) {
+        prefetchLifecycle.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            com.nuvio.tv.core.util.collectIdlePrefetch(kotlinx.coroutines.flow.flowOf(uiState.meta), prefetchInput) {
+                viewModel.prefetchMovieStreams(it)
+            }
+        }
     }
     val posterCardCornerRadiusDp by viewModel.posterCardCornerRadiusDp.collectAsStateWithLifecycle()
     val effectiveAutoplayEnabled by viewModel.effectiveAutoplayEnabled.collectAsStateWithLifecycle(
@@ -582,6 +588,7 @@ fun MetaDetailsScreen(
             .fillMaxSize()
             .background(NuvioTheme.colors.Background)
             .onPreviewKeyEvent { keyEvent ->
+                prefetchInput.value = System.nanoTime()
                 if (currentIsTrailerPlaying) {
                     if (currentShowTrailerControls) {
                         if (keyEvent.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) {
@@ -2639,6 +2646,7 @@ private fun MetaDetailsContent(
                             downFocusRequester = episodesDownFocusRequester,
                             episodeFocusRequesters = seasonEpisodeFocusRequesters,
                             enterFocusToken = episodeEntryToken,
+                            onEnterFocusHandled = { handled -> if (episodeEntryToken == handled) episodeEntryToken = 0 },
                             enterEpisodeId = visibleEpisodeRestoreId ?: lastFocusedEpisodeIdBySeason[selectedSeason]
                                 ?: nextToWatch?.nextVideoId,
                             restoreEpisodeId = visibleEpisodeRestoreId,

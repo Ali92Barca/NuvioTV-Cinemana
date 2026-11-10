@@ -15,6 +15,8 @@ import java.net.URLEncoder
 import javax.inject.Inject
 import javax.inject.Singleton
 
+private val prefetchVideoIdPattern = Regex("(?:imdb:)?tt[0-9]+(?::[0-9]+:[0-9]+)?|tmdb:(?:(?:movie|tv|series):)?[0-9]+(?::[0-9]+:[0-9]+)?")
+
 /** Only built-in link metadata is warmed. No playback, scrobbling, or media downloads. */
 @Singleton
 class BuiltinStreamPrefetcher @Inject constructor(
@@ -72,7 +74,7 @@ class BuiltinStreamPrefetcher @Inject constructor(
             }
             if (id.startsWith("$provider:")) return true
             if (provider == "cinemana" && id.startsWith("cinemana-series:")) return true
-            return id.matches(Regex("(?:imdb:)?tt[0-9]+(?::[0-9]+:[0-9]+)?|tmdb:(?:(?:movie|tv|series):)?[0-9]+(?::[0-9]+:[0-9]+)?"))
+            return id.matches(prefetchVideoIdPattern)
         }
         private fun encode(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
     }

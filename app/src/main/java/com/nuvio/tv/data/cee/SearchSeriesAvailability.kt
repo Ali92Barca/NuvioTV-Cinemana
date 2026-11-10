@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import com.nuvio.tv.core.network.awaitProviderStatus
 
 /** Confirms an unusable Cinemana result against a visible, playable Cee series. */
 @Singleton
@@ -56,7 +57,7 @@ class SearchSeriesAvailability @Inject constructor(http: OkHttpClient) {
             val base = "https://cinemana.shabakaty.com/api/android"
             listOf("allVideoInfo", "videoSeason").all { route ->
                 val request = Request.Builder().url("$base/$route/id/$id").get().build()
-                transport.newCall(request).execute().use { it.code == 400 || it.code == 404 || it.code == 410 }
+                transport.newCall(request).awaitProviderStatus() in setOf(400, 404, 410)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled

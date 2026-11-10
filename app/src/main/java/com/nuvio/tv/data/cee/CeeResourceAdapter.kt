@@ -27,6 +27,7 @@ class CeeResourceAdapter(
     private val verifyEpisodes: suspend (Int, List<CeeClient.Episode>, Set<BuiltinDetailsStore.EpisodeKey>?) -> Boolean = { _, _, _ -> false },
     private val detailsStore: BuiltinDetailsStore? = null,
     private val matchEpisodeLayout: suspend (Int, List<CeeClient.Episode>) -> List<CeeClient.Episode>? = { _, _ -> null },
+    private val tmdbFetch: (suspend (String) -> String)? = null,
     private val tmdbCredentials: () -> com.nuvio.android.cinemana.TmdbCredentials,
 ) {
     companion object {
@@ -391,7 +392,9 @@ class CeeResourceAdapter(
         val credentials = tmdbCredentials()
         val bindingKey = "cee|$type|$videoId"
         val find = suspend {
-            CinemanaTmdbMatcher(credentials.apiKey, credentials.language).resolve(
+            val matcher = tmdbFetch?.let { CinemanaTmdbMatcher(credentials.apiKey, credentials.language, it) }
+                ?: CinemanaTmdbMatcher(credentials.apiKey, credentials.language)
+            matcher.resolve(
                 titles = listOf(info.optString("en_title"), info.optString("ar_title")),
                 year = info.optString("year").take(4).toIntOrNull(),
                 series = type == "series",

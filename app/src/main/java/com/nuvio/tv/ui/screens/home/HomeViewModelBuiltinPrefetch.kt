@@ -1,24 +1,21 @@
 package com.nuvio.tv.ui.screens.home
 
 import com.nuvio.tv.data.builtincache.BuiltinStreamPrefetcher.Target
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.Flow
 
+private val publicContentIdPattern = Regex("(?:imdb:)?tt[0-9]+|tmdb:(?:(?:movie|tv|series):)?[0-9]+")
+
 internal suspend fun <T> collectHomeIdlePrefetch(targets: Flow<T>, input: Flow<Long>, warm: suspend (T) -> Unit) {
-    combine(targets, input) { batch, _ -> batch }.collectLatest { batch ->
-        delay(5_000)
-        warm(batch)
-    }
+    com.nuvio.tv.core.util.collectIdlePrefetch(targets, input, warm)
 }
 
 internal fun continueWatchingPrefetchTargets(items: List<ContinueWatchingItem>): List<Target> = buildList {
     fun addItem(type: String, video: String, content: String, season: Int?, episode: Int?) {
         val normalized = if (type.equals("tv", true)) "series" else type.lowercase()
         add(Target(normalized, video))
-        if (content.matches(Regex("(?:imdb:)?tt[0-9]+|tmdb:(?:(?:movie|tv|series):)?[0-9]+"))) {
+        if (content.matches(publicContentIdPattern)) {
             if (normalized == "series" && season != null && episode != null && season > 0 && episode > 0)
                 add(Target(normalized, "$content:$season:$episode"))
             else if (normalized == "movie") add(Target(normalized, content))

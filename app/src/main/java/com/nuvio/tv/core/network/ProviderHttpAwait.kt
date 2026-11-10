@@ -27,3 +27,17 @@ internal suspend fun Call.awaitProviderBody(): String = suspendCancellableCorout
         }
     })
 }
+
+/** Availability probes need the HTTP code, including 4xx, without consuming a response body. */
+internal suspend fun Call.awaitProviderStatus(): Int = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, error: IOException) {
+            if (continuation.isActive) continuation.resumeWithException(error)
+        }
+        override fun onResponse(call: Call, response: Response) {
+            val code = response.use { it.code }
+            if (continuation.isActive) continuation.resume(code)
+        }
+    })
+}

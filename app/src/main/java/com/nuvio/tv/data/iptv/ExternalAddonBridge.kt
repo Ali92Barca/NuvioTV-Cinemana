@@ -27,9 +27,23 @@ import kotlinx.coroutines.sync.withPermit
 import com.nuvio.tv.data.repository.sharedRequest
 import java.util.concurrent.ConcurrentHashMap
 import java.net.URLEncoder
-import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private val translatedTurkishPrefixPattern = Regex("(?:^| )ar tr s(?: |$)")
+private val imdbIdentityPattern = Regex("tt[0-9]+")
+private val builtinSeriesPattern = Regex("cinemana-series:[0-9]+|cee:[0-9]+")
+private val editionEpisodeLabelPattern = Regex("(S[0-9]+\\s*E[0-9]+\\s*[-–:]?\\s*)\\((?:Original|Light\\s+Modified)\\)\\s*", RegexOption.IGNORE_CASE)
+private val tmdbIdentityPattern = Regex("tmdb:(?:(?:tv|series|movie):)?([0-9]+)")
+private val releaseYearPattern = Regex("(?:19|20)[0-9]{2}")
+
+private val typedMovieIdentityPattern = Regex("tmdb:movie:([1-9][0-9]*)")
+private val movieIdentityPattern = Regex("tmdb:(?:movie:)?([0-9]+)")
+private val seriesEpisodeIdentityPattern = Regex("(tt[0-9]+|tmdb:(?:(?:tv|series):)?[0-9]+)(?::([0-9]+):([0-9]+))?")
+private val numberedEpisodePattern = Regex("(?:^| )s([0-9]+) ?e([0-9]+)(?: |$)")
+private val episodeOnlyTitlePattern = Regex("(?:^|.* )(?:episode|ep|الحلقه) 0*[0-9]+$")
+private val coordinateOnlyTitlePattern = Regex("(?:^|.* )s[0-9]+ ?e[0-9]+$")
+private val numberedPartPattern = Regex("^(.+?)\\s+([2-9]|[1-9][0-9])$")
 
 /** Native stream IDs stay native; verified episode identities are stored separately. */
 @Singleton
@@ -37,8 +51,10 @@ class ExternalAddonBridge @Inject constructor(
     private val api: AddonApi,
     private val tmdb: TmdbApi? = null,
     private val identities: SharedPlaybackIdentity? = null,
-    private val matchCache: IptvIdentityCache? = null
+    private val matchCache: IptvIdentityCache? = null,
+    http: okhttp3.OkHttpClient = okhttp3.OkHttpClient()
 ) {
+    private val tmdbFetch = com.nuvio.tv.core.network.ProviderMetadataFetch(http)
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshes = ConcurrentHashMap<String, Deferred<Meta>>()
     private val refreshLimit = Semaphore(1)
@@ -63,7 +79,7 @@ class ExternalAddonBridge @Inject constructor(
     private val infoCache = object : LinkedHashMap<String, InfoEntry>(32, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, InfoEntry>?) = size > 128
     }
-    private data class NativeEnrichment(val created: Long, val source: Meta, val result: Meta, val layoutRevision: Int)
+    private data class NativeEnrichment(val created: Long, val source: Meta, val result: Meta, val layoutRevision: Long)
     private val nativeEnrichments = object : LinkedHashMap<String, NativeEnrichment>(32, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, NativeEnrichment>?) = size > 32
     }
@@ -77,7 +93,7 @@ class ExternalAddonBridge @Inject constructor(
     /** Better Stream advertises tmdb: but does not resolve the typed movie route. */
     fun streamRequestId(addon: Addon, type: String, id: String): String {
         if (type != "movie" || !addon.id.startsWith("org.betterstream.") || !isXtream(addon)) return id
-        val number = Regex("tmdb:movie:([1-9][0-9]*)").matchEntire(id)?.groupValues?.get(1) ?: return id
+        val number = typedMovieIdentityPattern.matchEntire(id)?.groupValues?.get(1) ?: return id
         return "tmdb:$number"
     }
     internal fun verifiedSiblingMap(tmdbId: String?, canonical: Map<Int, Set<Int>>, native: Map<Int, List<Int>>,
@@ -116,7 +132,7 @@ class ExternalAddonBridge @Inject constructor(
     }
     internal fun translatedLabel(label: String): Boolean {
         val value = ExternalAddonTitleMatcher.normalize(label)
-        return Regex("(?:^| )ar tr s(?: |$)").containsMatchIn(value) ||
+        return translatedTurkishPrefixPattern.containsMatchIn(value) ||
             IptvIdentityCache.translatedCatalog(value)
     }
     /** One bounded metadata-only stream lookup, only when relaxed mapping is needed.
@@ -154,15 +170,15 @@ class ExternalAddonBridge @Inject constructor(
         resolveAll(addon, type, canonical, season, episode).singleOrNull()
 
     fun cachedMovieIds(addon: Addon, id: String): List<String> {
-        val tmdb = Regex("tmdb:(?:movie:)?([0-9]+)").matchEntire(id)?.groupValues?.get(1)
-        val imdb = id.takeIf { Regex("tt[0-9]+").matches(it) }
+        val tmdb = movieIdentityPattern.matchEntire(id)?.groupValues?.get(1)
+        val imdb = id.takeIf { imdbIdentityPattern.matches(it) }
         if (tmdb == null && imdb == null) return emptyList()
         return identities?.externalMovieSources(addon.baseUrl, tmdb, imdb).orEmpty()
     }
 
     fun cachedSeriesIds(addon: Addon, id: String, season: Int?, episode: Int?): List<String> {
         if (season == null || episode == null) return emptyList()
-        val match = Regex("(tt[0-9]+|tmdb:(?:(?:tv|series):)?[0-9]+)(?::([0-9]+):([0-9]+))?")
+        val match = seriesEpisodeIdentityPattern
             .matchEntire(id) ?: return emptyList()
         if (match.groupValues[2].isNotEmpty() &&
             (match.groupValues[2].toIntOrNull() != season || match.groupValues[3].toIntOrNull() != episode)) return emptyList()
@@ -263,11 +279,11 @@ class ExternalAddonBridge @Inject constructor(
                 val expectedSeason = completeSeason.filter { it.episode in episodeMap }
                 val video = nativeSeasonVideos.singleOrNull { it.episode == episodeMap[episode] } ?: return null
                 if (!compatibleEpisode(expected, video, relaxed, expectedSeason.size, info.turkish, info.tmdbId, season)) return null
-                val canonicalId = (if (partParent) canonical.id.takeIf { Regex("cinemana-series:[0-9]+|cee:[0-9]+").matches(it) } else null)
+                val canonicalId = (if (partParent) canonical.id.takeIf { builtinSeriesPattern.matches(it) } else null)
                     ?: info.tmdbId?.takeIf { partParent }?.let { "tmdb:tv:$it" }
-                    ?: info.imdbId?.takeIf { Regex("tt[0-9]+").matches(it) }
+                    ?: info.imdbId?.takeIf { imdbIdentityPattern.matches(it) }
                     ?: info.tmdbId?.let { "tmdb:tv:$it" }
-                    ?: canonical.id.takeIf { Regex("cinemana-series:[0-9]+|cee:[0-9]+").matches(it) }
+                    ?: canonical.id.takeIf { builtinSeriesPattern.matches(it) }
                 if (canonicalId != null) identities?.learnExternalSeason(addon.baseUrl, native.id, canonicalId, nativeSeason, season,
                     expectedSeason.mapNotNull { item ->
                         val number = item.episode ?: return@mapNotNull null
@@ -279,7 +295,7 @@ class ExternalAddonBridge @Inject constructor(
                 info.tmdbId?.let { matchCache?.rememberWork(addon.baseUrl, native.id, it, info.imdbId, translatedProof) }
                 if (video.id.isBlank()) return null
                 val label = ExternalAddonTitleMatcher.normalize(native.name + " " + video.title.orEmpty())
-                val translated = label.contains("مترجم") || Regex("(?:^| )ar tr s(?: |$)").containsMatchIn(label)
+                val translated = label.contains("مترجم") || translatedTurkishPrefixPattern.containsMatchIn(label)
                 return video.id to translated
             }
             val rows = mutableListOf<MetaPreviewDto>()
@@ -336,17 +352,17 @@ class ExternalAddonBridge @Inject constructor(
         if (actual.id.isBlank()) return false
         if (arabic || turkish) return true
         val label = (actual.title ?: actual.name.orEmpty()).replace(
-            Regex("(S[0-9]+\\s*E[0-9]+\\s*[-–:]?\\s*)\\((?:Original|Light\\s+Modified)\\)\\s*", RegexOption.IGNORE_CASE), "\$1")
+            editionEpisodeLabelPattern, "\$1")
         val name = ExternalAddonTitleMatcher.normalize(label)
-        val coordinates = Regex("(?:^| )s([0-9]+) ?e([0-9]+)(?: |$)").findAll(name).toList()
+        val coordinates = numberedEpisodePattern.findAll(name).toList()
         if (coordinates.isNotEmpty() && (coordinates.size != 1 ||
                 coordinates.single().groupValues[1].toIntOrNull() != actual.season ||
                 coordinates.single().groupValues[2].toIntOrNull() != actual.episode)) return false
         val episodeName = coordinates.singleOrNull()?.let { name.substring(it.range.last + 1).trim() }
             ?.takeIf(String::isNotBlank) ?: name
         val expectedName = ExternalAddonTitleMatcher.normalize(expected.title)
-        val generic = Regex("(?:^|.* )(?:episode|ep|الحلقه) 0*[0-9]+$")
-        val numbered = Regex("(?:^|.* )s[0-9]+ ?e[0-9]+$")
+        val generic = episodeOnlyTitlePattern
+        val numbered = coordinateOnlyTitlePattern
         if (expectedName.isBlank() || (episodeName != expectedName && name != expectedName &&
                 !((generic.matches(episodeName) || numbered.matches(name)) && count >= 2))) return false
         return expected.released == null || actual.released == null || expected.released.take(10) == actual.released.take(10)
@@ -384,13 +400,13 @@ class ExternalAddonBridge @Inject constructor(
     /** Learn the inverse direction when a user opens an Xtream catalog title directly. */
     suspend fun enrichNative(addon: Addon, native: Meta): Meta = withContext(Dispatchers.IO) {
         identities?.migrateLegacyCache()
-        val publicEvidence = native.tmdbId?.toIntOrNull()?.let { it > 0 } == true || native.imdbId?.matches(Regex("tt[0-9]+")) == true
+        val publicEvidence = native.tmdbId?.toIntOrNull()?.let { it > 0 } == true || native.imdbId?.matches(imdbIdentityPattern) == true
         if (!com.nuvio.tv.data.repository.privateAddonId(native.id) ||
             (!(isXtream(addon) && native.id.startsWith("xt_")) && !publicEvidence))
             return@withContext identities?.withWatchIdentity(native, addon.baseUrl) ?: native
         val key = hash(addon.baseUrl + "\u0000" + addon.version + "\u0000" + native.id)
         val cached = synchronized(nativeEnrichments) { nativeEnrichments[key] }
-        if (cached != null && cached.source == native && cached.layoutRevision == identities?.entries?.value.hashCode() && System.nanoTime() - cached.created < 300_000_000_000L)
+        if (cached != null && cached.source == native && cached.layoutRevision == (identities?.revision ?: 0L) && System.nanoTime() - cached.created < 300_000_000_000L)
             return@withContext cached.result
         val stored = if (native.apiType == "series") matchCache?.work(addon.baseUrl, native.id) else null
         val savedId = stored?.get("tmdb")?.asString
@@ -411,7 +427,7 @@ class ExternalAddonBridge @Inject constructor(
                                 if (generation == cacheGeneration && updated.sharedProgressCompatible) {
                                     val result = identities.withWatchIdentity(updated, addon.baseUrl)
                                     synchronized(nativeEnrichments) { nativeEnrichments[key] = NativeEnrichment(
-                                        System.nanoTime(), native, result, identities.entries.value.hashCode()) }
+                                        System.nanoTime(), native, result, identities.revision) }
                                     result
                                 } else route
                             }
@@ -425,14 +441,24 @@ class ExternalAddonBridge @Inject constructor(
         val enriched = if (native.apiType == "movie") enrichNativeMovie(addon, native) else enrichNativeSeries(addon, native)
         val result = if (enriched.videos.isNotEmpty()) identities?.withWatchIdentity(enriched, addon.baseUrl) ?: enriched else enriched
         if (result.sharedProgressCompatible) synchronized(nativeEnrichments) {
-            nativeEnrichments[key] = NativeEnrichment(System.nanoTime(), native, result, identities?.entries?.value.hashCode())
+            nativeEnrichments[key] = NativeEnrichment(System.nanoTime(), native, result, (identities?.revision ?: 0L))
         }
         result
     }
 
     private fun nativeFingerprint(native: Meta) = hash(native.videos.map { listOf(it.id, it.season, it.episode) }.toString())
-    private fun providerFingerprint(id: String) = hash(identities?.entries?.value.orEmpty()
-        .filter { "tmdb:tv:$id" in it.aliases }.toString())
+    private data class ProviderLayout(val revision: Long, val digest: String)
+    private val providerLayouts = object : LinkedHashMap<String, ProviderLayout>(32, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ProviderLayout>?) = size > 128
+    }
+    private fun providerFingerprint(id: String): String {
+        val revision = identities?.revision ?: 0L
+        synchronized(providerLayouts) { providerLayouts[id]?.takeIf { it.revision == revision }?.let { return it.digest } }
+        // Preserve the exact legacy row ordering/string representation in durable cache evidence.
+        val digest = hash(identities?.providerRows("tmdb:tv:$id").orEmpty().toString())
+        synchronized(providerLayouts) { providerLayouts[id] = ProviderLayout(revision, digest) }
+        return digest
+    }
 
     private suspend fun enrichNativeMovie(addon: Addon, native: Meta): Meta {
         val api = tmdb ?: return native
@@ -442,7 +468,7 @@ class ExternalAddonBridge @Inject constructor(
                 val sourceYear = year(native.releaseInfo ?: native.released)
                 val match = native.tmdbId?.toIntOrNull()?.takeIf { it > 0 }?.let {
                     com.nuvio.android.cinemana.CinemanaTmdbMatcher.Match(it, native.name, null, null, null, 200.0)
-                } ?: com.nuvio.android.cinemana.CinemanaTmdbMatcher(BuildConfig.TMDB_API_KEY)
+                } ?: com.nuvio.android.cinemana.CinemanaTmdbMatcher(BuildConfig.TMDB_API_KEY, fetch = tmdbFetch::fetch)
                     .match(ExternalAddonTitleMatcher.titleVariants(native.name).toList(), sourceYear, false, native.imdbId)
                     ?: return@withTimeoutOrNull native
                 val response = api.getMovieDetails(match.tmdbId, BuildConfig.TMDB_API_KEY, "ar-SA")
@@ -450,7 +476,7 @@ class ExternalAddonBridge @Inject constructor(
                 val officialYear = year(details.releaseDate)
                 if (details.originalLanguage != "ar" && sourceYear != null && officialYear != null && kotlin.math.abs(sourceYear - officialYear) > 1) return@withTimeoutOrNull native
                 val imdb = api.getMovieExternalIds(match.tmdbId, BuildConfig.TMDB_API_KEY).body()?.imdbId
-                    ?.takeIf { Regex("tt[0-9]+").matches(it) }
+                    ?.takeIf { imdbIdentityPattern.matches(it) }
                 if (conflicts(native.imdbId, imdb) || conflicts(native.tmdbId, match.tmdbId.toString())) return@withTimeoutOrNull native
                 identities.learnExternalMovie(addon.baseUrl, native.id, match.tmdbId.toString(), imdb ?: native.imdbId)
                 native.copy(tmdbId = match.tmdbId.toString(), imdbId = imdb ?: native.imdbId, sharedProgressCompatible = true)
@@ -465,7 +491,7 @@ class ExternalAddonBridge @Inject constructor(
         return withTimeoutOrNull(25_000) {
             try {
                 val labels = ExternalAddonTitleMatcher.searchTitles(native.name)
-                val matcher = com.nuvio.android.cinemana.CinemanaTmdbMatcher(BuildConfig.TMDB_API_KEY)
+                val matcher = com.nuvio.android.cinemana.CinemanaTmdbMatcher(BuildConfig.TMDB_API_KEY, fetch = tmdbFetch::fetch)
                 val stored = matchCache?.work(addon.baseUrl, native.id)
                 val nativeLayout = nativeFingerprint(native)
                 val savedId = stored?.get("tmdb")?.asString
@@ -493,7 +519,7 @@ class ExternalAddonBridge @Inject constructor(
                 if (!relaxed && !turkish && sourceYear != null && match.year != null && kotlin.math.abs(sourceYear - match.year) > 1)
                     return@withTimeoutOrNull native
                 val imdb = api.getTvExternalIds(match.tmdbId, BuildConfig.TMDB_API_KEY).body()?.imdbId
-                    ?.takeIf { Regex("tt[0-9]+").matches(it) }
+                    ?.takeIf { imdbIdentityPattern.matches(it) }
                 if (conflicts(native.imdbId, imdb) || conflicts(native.tmdbId, match.tmdbId.toString())) return@withTimeoutOrNull native
                 currentCoroutineContext().ensureActive()
                 matchCache?.rememberWork(addon.baseUrl, native.id, match.tmdbId.toString(), imdb, translated)
@@ -551,10 +577,10 @@ class ExternalAddonBridge @Inject constructor(
         synchronized(infoCache) { infoCache[cacheKey]?.takeIf { System.nanoTime() - it.created < 300_000_000_000L } }?.let { return it.info }
         val titles = linkedSetOf(meta.name)
         var id = meta.tmdbId
-        if (tmdb != null && id == null) id = Regex("tmdb:(?:(?:tv|series|movie):)?([0-9]+)").matchEntire(meta.id)?.groupValues?.get(1)
+        if (tmdb != null && id == null) id = tmdbIdentityPattern.matchEntire(meta.id)?.groupValues?.get(1)
         var imdb = meta.imdbId
         if (tmdb != null && !BuildConfig.TMDB_API_KEY.isBlank() && id == null) try {
-            val external = imdb ?: meta.id.takeIf { Regex("tt[0-9]+").matches(it) }
+            val external = imdb ?: meta.id.takeIf { imdbIdentityPattern.matches(it) }
             if (external != null) {
                 imdb = external
                 val result = tmdb.findByExternalId(external, BuildConfig.TMDB_API_KEY).body()
@@ -594,7 +620,7 @@ class ExternalAddonBridge @Inject constructor(
         }
     }
     internal fun splitPart(title: String): Pair<String, Int>? {
-        val match = Regex("^(.+?)\\s+([2-9]|[1-9][0-9])$").matchEntire(title.trim()) ?: return null
+        val match = numberedPartPattern.matchEntire(title.trim()) ?: return null
         return match.groupValues[1] to match.groupValues[2].toInt()
     }
     /** A numeric title (e.g. an age) is not automatically a numbered sequel. */
@@ -610,8 +636,8 @@ class ExternalAddonBridge @Inject constructor(
         } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { false }
     }
     private fun conflicts(expected: String?, actual: String?) = !expected.isNullOrBlank() && !actual.isNullOrBlank() && !expected.equals(actual, true)
-    private fun year(value: String?) = value?.let { Regex("(?:19|20)[0-9]{2}").find(it)?.value?.toIntOrNull() }
-    private fun hash(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
+    private fun year(value: String?) = value?.let { releaseYearPattern.find(it)?.value?.toIntOrNull() }
+    private fun hash(value: String) = com.nuvio.tv.core.util.identityDigest(value)
     private fun encode(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
     private fun url(addon: Addon, path: String): String {
         val base = addon.baseUrl.trimEnd('/')

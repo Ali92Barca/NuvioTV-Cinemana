@@ -36,9 +36,11 @@ class CeeAddonApi(
         mapOf("name" to "year", "options" to ceeDiscoverYears)
     )
     private val client = CeeClient(http)
-    private val cinemanaClient = com.nuvio.android.cinemana.CinemanaClient()
+    private val cinemanaClient = com.nuvio.tv.core.network.providerCinemanaClient(http)
     private val tmdbLookup = CeeTmdbLookup(http, tmdbCredentials)
+    private val tmdbFetch = com.nuvio.tv.core.network.ProviderMetadataFetch(http)
     private val adapter = CeeResourceAdapter(client = client, tmdbCredentials = tmdbCredentials,
+        tmdbFetch = tmdbFetch::fetch,
         detailsStore = detailsStore,
         matchEpisodeLayout = { id, episodes -> tmdbLookup.matchEpisodeLayout(id, episodes) },
         verifyEpisodes = { id, episodes, unchecked -> tmdbLookup.compatibleEpisodes(id, episodes, client, unchecked) })

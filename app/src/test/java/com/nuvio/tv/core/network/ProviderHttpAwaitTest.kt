@@ -10,6 +10,28 @@ import org.junit.Test
 import java.io.IOException
 
 class ProviderHttpAwaitTest {
+    @Test fun statusProbeClosesUnreadBodiesIncludingErrorsAndCancelsTheCall() = runTest {
+        for (code in listOf(200, 400, 404, 410, 503)) {
+            val call = mockk<Call>()
+            val body = mockk<ResponseBody>(relaxed = true)
+            every { call.enqueue(any()) } answers { firstArg<Callback>().onResponse(call, response(body, code)) }
+            every { call.cancel() } just Runs
+            assertEquals(code, call.awaitProviderStatus())
+            verify(exactly = 1) { body.close() }
+            verify(exactly = 0) { body.string() }
+        }
+        val call = mockk<Call>()
+        lateinit var callback: Callback
+        every { call.enqueue(any()) } answers { callback = firstArg() }
+        every { call.cancel() } just Runs
+        val waiting = async(start = CoroutineStart.UNDISPATCHED) { call.awaitProviderStatus() }
+        waiting.cancelAndJoin()
+        verify(exactly = 1) { call.cancel() }
+        val late = mockk<ResponseBody>(relaxed = true)
+        callback.onResponse(call, response(late))
+        verify(exactly = 1) { late.close() }
+        verify(exactly = 0) { late.string() }
+    }
     @Test fun cancellingTheCoroutineCancelsTheSocketAndLateResponseIsClosedWithoutReading() = runTest {
         val call = mockk<Call>()
         lateinit var callback: Callback

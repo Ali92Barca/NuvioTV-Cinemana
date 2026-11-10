@@ -27,7 +27,7 @@ class SharedWatchProgressRepository @Inject constructor(
         emitAll(identityChanges.flatMapLatest { block(identities.related(id, seriesHint).flatMap { identities.externalRelated(it, seriesHint) }
             .flatMap { identities.related(it, seriesHint) }.toSet()) })
     }.flowOn(Dispatchers.Default)
-    private fun list(source: Flow<List<WatchProgress>>) = combine(source, identityChanges) { items, _ -> identities.project(items) }.flowOn(Dispatchers.Default)
+    private fun list(source: Flow<List<WatchProgress>>) = combine(source.distinctUntilChanged(), identityChanges) { items, _ -> identities.project(items) }.flowOn(Dispatchers.Default)
     private fun latest(items: List<WatchProgress>) = identities.project(items).groupBy { it.contentId }
         .values.mapNotNull { group -> group.maxWithOrNull(compareBy<WatchProgress> { it.lastWatched }.thenBy { it.season ?: 0 }.thenBy { it.episode ?: 0 }) }
         .sortedByDescending { it.lastWatched }

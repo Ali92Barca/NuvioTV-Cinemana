@@ -61,8 +61,10 @@ class SearchViewModel @Inject constructor(
     private val serverCatalog: ServerCatalog,
     private val cinemanaAvailabilityMonitor: com.nuvio.tv.core.network.CinemanaAvailabilityMonitor,
     @ApplicationContext private val context: Context,
-    private val searchSeriesAvailability: com.nuvio.tv.data.cee.SearchSeriesAvailability? = null
+    private val searchSeriesAvailability: com.nuvio.tv.data.cee.SearchSeriesAvailability? = null,
+    http: okhttp3.OkHttpClient = okhttp3.OkHttpClient()
 ) : ViewModel() {
+    private val cinemanaLanguageClient = com.nuvio.tv.core.network.providerCinemanaClient(http)
 
     private val _uiState = MutableStateFlow(SearchUiState())
     val uiState: StateFlow<SearchUiState> = _uiState.asStateFlow()
@@ -1277,7 +1279,7 @@ class SearchViewModel @Inject constructor(
 
         cinemanaLanguageJob = viewModelScope.launch {
             try {
-                val languages = com.nuvio.android.cinemana.CinemanaClient()
+                val languages = cinemanaLanguageClient
                     .categoryLanguages(categoryIds)
                     .map {
                         CinemanaLanguageOption(

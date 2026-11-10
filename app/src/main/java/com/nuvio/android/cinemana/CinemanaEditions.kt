@@ -2,6 +2,9 @@ package com.nuvio.android.cinemana
 
 import org.json.JSONObject
 
+private val editionSuffixPattern = Regex("\\s*(?:[-–|:]|\\(|\\[)?\\s*(?:arabic\\s+)?(?:مدبلج(?:ة)?|مترجم(?:ة)?|dubbed|subtitled|dublaj)(?:\\s+(?:بالعربية|عربي|arabic|version))*\\s*[\\])]?[ \\t]*$", RegexOption.IGNORE_CASE)
+private val formattedDurationPattern = Regex("\\d{1,3}:\\d{2}(?::\\d{2})?")
+
 object CinemanaEditions {
     /** Search records use a language ID; allVideoInfo uses a language object. */
     fun originalTurkishAudio(record: JSONObject): Boolean =
@@ -23,7 +26,7 @@ object CinemanaEditions {
     fun explicit(titles: List<String>) = label(titles) != "نسخة Cinemana"
 
     fun identityTitle(title: String): String = title.replace(
-        Regex("\\s*(?:[-–|:]|\\(|\\[)?\\s*(?:arabic\\s+)?(?:مدبلج(?:ة)?|مترجم(?:ة)?|dubbed|subtitled|dublaj)(?:\\s+(?:بالعربية|عربي|arabic|version))*\\s*[\\])]?[ \\t]*$", RegexOption.IGNORE_CASE), ""
+        editionSuffixPattern, ""
     ).trim()
 
     /** Generic numeric duration fields have undocumented units, so don't guess. */
@@ -51,7 +54,7 @@ object CinemanaEditions {
         if (minutes > 0) return clock((minutes * 60).toLong())
         for (field in listOf("duration", "videoDuration", "video_duration", "runtime")) {
             val text = record.optString(field).trim()
-            if (text.matches(Regex("\\d{1,3}:\\d{2}(?::\\d{2})?"))) {
+            if (text.matches(formattedDurationPattern)) {
                 val parts = text.split(':').map { it.toLong() }
                 if (parts.drop(1).any { it > 59 }) continue
                 val seconds = if (parts.size == 3) parts[0] * 3600 + parts[1] * 60 + parts[2] else parts[0] * 60 + parts[1]

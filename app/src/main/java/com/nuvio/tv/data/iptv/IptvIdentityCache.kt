@@ -4,7 +4,6 @@ import android.content.Context
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -12,8 +11,7 @@ import javax.inject.Singleton
 @Singleton
 class IptvIdentityCache @Inject constructor(@ApplicationContext private val context: Context) {
     private val index get() = context.getSharedPreferences("iptv_identity_index_v1", Context.MODE_PRIVATE)
-    internal fun scope(url: String) = MessageDigest.getInstance("SHA-256")
-        .digest(url.trimEnd('/').toByteArray()).joinToString("") { "%02x".format(it) }
+    internal fun scope(url: String) = com.nuvio.tv.core.util.identityDigest(url.trimEnd('/'))
     private fun file(scope: String) = context.getSharedPreferences("iptv_identity_$scope", Context.MODE_PRIVATE)
     private fun remember(scope: String) {
         val known = index.getStringSet("scopes", mutableSetOf()).orEmpty()

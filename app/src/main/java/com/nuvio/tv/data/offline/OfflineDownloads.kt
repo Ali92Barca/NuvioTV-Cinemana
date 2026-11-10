@@ -73,15 +73,11 @@ class OfflineDownloads @Inject constructor(@ApplicationContext private val conte
             val statusColumn = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
             while (cursor.moveToNext()) statuses[cursor.getLong(idColumn)] = cursor.getInt(statusColumn)
         }
-        val active = statuses.values.any { it in setOf(DownloadManager.STATUS_PENDING,
-            DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PAUSED) }
-        val keys = items.filter { item ->
-            !locationUnavailable(item) && (listOf(item.video) + item.subtitles.map { it.first }).all { id ->
-                statuses[id] == DownloadManager.STATUS_SUCCESSFUL && runCatching {
-                    context.contentResolver.openAssetFileDescriptor(uri(id), "r")?.use { true } ?: false
-                }.getOrDefault(false)
-            }
-        }.flatMap { it.identity?.keys().orEmpty() }.toSet()
+        val active = hasActiveOfflineTransfers(statuses.values)
+        val keys = readyOfflineKeys(items, statuses, canOpen = { id ->
+            runCatching { context.contentResolver.openAssetFileDescriptor(uri(id), "r")?.use { true } ?: false }
+                .getOrDefault(false)
+        }, locationUnavailable = ::locationUnavailable)
         return Readiness(keys, active)
     }
 
@@ -101,6 +97,7 @@ class OfflineDownloads @Inject constructor(@ApplicationContext private val conte
             prefs.unregisterOnSharedPreferenceChangeListener(listener)
             throw error
         }
+        // Reconcile after registration too: produceIn may start after the collector's first read.
         trySend(Unit)
         awaitClose {
             prefs.unregisterOnSharedPreferenceChangeListener(listener)

@@ -3,6 +3,10 @@ package com.nuvio.tv.data.iptv
 import java.text.Normalizer
 import java.util.Locale
 
+private val arabicMarksPattern = Regex("[\\u064B-\\u065F\\u0670\\u0640]")
+private val nonTitlePattern = Regex("[^\\p{L}\\p{N}]+")
+private val spacesPattern = Regex("\\s+")
+
 /**
  * Pure, credential-free matcher for catalog search results returned by external Stremio addons.
  *
@@ -13,6 +17,17 @@ import java.util.Locale
  * Intentionally avoids selecting the first of multiple identically named IPTV editions.
  */
 internal object ExternalAddonTitleMatcher {
+    private const val arabicLetters = "\\u0600-\\u06FF\\u0750-\\u077F\\u0870-\\u08FF"
+    private const val latinLetters = "a-z\\u00C0-\\u024F\\u1E00-\\u1EFF"
+    private const val searchLatinLetters = "a-zA-Z\\u00C0-\\u024F\\u1E00-\\u1EFF"
+    private val searchAliasPatterns = listOf(arabicLetters, searchLatinLetters).map { script ->
+        Regex("[$script\\p{N}]+(?:\\s+[$script\\p{N}]+)*")
+    }
+    private val arabicTitlePattern = Regex("[$arabicLetters\\p{N}]+(?:\\s+[$arabicLetters\\p{N}]+)*")
+    private val latinTitlePattern = Regex("[$latinLetters\\p{N}]+(?:\\s+[$latinLetters\\p{N}]+)*")
+    private val arabicLetterPattern = Regex("[$arabicLetters]")
+    private val latinLetterPattern = Regex("[$latinLetters]")
+
     data class Candidate(
         val originalId: String,
         val name: String,
@@ -35,6 +50,7 @@ internal object ExternalAddonTitleMatcher {
         expectedTmdbId: String? = null
     ): Decision {
         val normalizedNames = titles.map(::normalize).filter(String::isNotEmpty).toSet()
+        val expectedVariants = titles.flatMap(::titleVariants).toSet()
         if (normalizedNames.isEmpty()) return Decision.NoMatch
 
         val scored = candidates.asSequence()
@@ -52,7 +68,7 @@ internal object ExternalAddonTitleMatcher {
                     expectedImdbId.equals(candidate.imdbId, ignoreCase = true)
                 val tmdbExact = !expectedTmdbId.isNullOrBlank() &&
                     expectedTmdbId == candidate.tmdbId
-                val nameExact = titleVariants(candidate.name).any { it in titles.flatMap(::titleVariants).toSet() }
+                val nameExact = titleVariants(candidate.name).any { it in expectedVariants }
                 // Do not accept substring-only matches: same-name shows across regions
                 // and editions are common, and often share a release year.
                 if (!nameExact && !imdbExact && !tmdbExact) return@mapNotNull null
@@ -80,23 +96,20 @@ internal object ExternalAddonTitleMatcher {
 
     internal fun normalize(value: String): String {
         val cleaned = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFKC)
-            .replace(Regex("[\\u064B-\\u065F\\u0670\\u0640]"), "")
+            .replace(arabicMarksPattern, "")
             .replace('أ', 'ا').replace('إ', 'ا').replace('آ', 'ا')
             .replace('ى', 'ي').replace('ة', 'ه')
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+            .replace(nonTitlePattern, " ")
             .trim()
-        return cleaned.replace(Regex("\\s+"), " ")
+        return cleaned.replace(spacesPattern, " ")
     }
 
     /** A bilingual label can carry two complete titles; never use arbitrary substrings. */
     internal fun searchTitles(value: String): List<String> {
         // Search services do not necessarily normalize Arabic letters as we do. Keep the
         // original spelling (مناعة, not مناعه) and bilingual aliases in outbound queries.
-        val arabic = "\\u0600-\\u06FF\\u0750-\\u077F\\u0870-\\u08FF"
-        val latin = "a-zA-Z\\u00C0-\\u024F\\u1E00-\\u1EFF"
-        val aliases = listOf(value.trim()) + listOf(arabic, latin).flatMap { script ->
-            Regex("[$script\\p{N}]+(?:\\s+[$script\\p{N}]+)*").findAll(value)
-                .map { it.value }.filter { it.length >= 4 }.toList()
+        val aliases = listOf(value.trim()) + searchAliasPatterns.flatMap { pattern ->
+            pattern.findAll(value).map { it.value }.filter { it.length >= 4 }.toList()
         }
         return aliases.filter(String::isNotBlank).distinctBy(::normalize)
     }
@@ -105,12 +118,10 @@ internal object ExternalAddonTitleMatcher {
         val normalized = normalize(value)
         // Android uses ICU regex, which rejects the JVM-only IsArabic/IsLatin aliases.
         // Explicit script ranges work on both Android and the desktop test runtime.
-        val arabicLetters = "\\u0600-\\u06FF\\u0750-\\u077F\\u0870-\\u08FF"
-        val latinLetters = "a-z\\u00C0-\\u024F\\u1E00-\\u1EFF"
-        val arabic = Regex("[$arabicLetters\\p{N}]+(?:\\s+[$arabicLetters\\p{N}]+)*").findAll(normalized)
-            .map { it.value }.filter { it.length >= 4 && Regex("[$arabicLetters]").containsMatchIn(it) }.toList()
-        val latin = Regex("[$latinLetters\\p{N}]+(?:\\s+[$latinLetters\\p{N}]+)*").findAll(normalized)
-            .map { it.value }.filter { it.length >= 4 && Regex("[$latinLetters]").containsMatchIn(it) }.toList()
+        val arabic = arabicTitlePattern.findAll(normalized)
+            .map { it.value }.filter { it.length >= 4 && arabicLetterPattern.containsMatchIn(it) }.toList()
+        val latin = latinTitlePattern.findAll(normalized)
+            .map { it.value }.filter { it.length >= 4 && latinLetterPattern.containsMatchIn(it) }.toList()
         return (listOf(normalized) + arabic + latin).filter(String::isNotBlank).toSet()
     }
 }

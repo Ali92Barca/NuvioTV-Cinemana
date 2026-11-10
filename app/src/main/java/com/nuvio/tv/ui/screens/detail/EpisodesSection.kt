@@ -417,7 +417,8 @@ fun EpisodesRow(
     windowResetKey: String? = null,
     offlineContentId: String? = null,
     enterFocusToken: Int = 0,
-    enterEpisodeId: String? = null
+    enterEpisodeId: String? = null,
+    onEnterFocusHandled: (Int) -> Unit = {}
 ) {
     val dedupedEpisodes = remember(episodes) { episodes.distinctBy { it.id } }
     var optionsEpisode by remember { mutableStateOf<Video?>(null) }
@@ -448,14 +449,19 @@ fun EpisodesRow(
     val episodeIds = remember(dedupedEpisodes) { dedupedEpisodes.mapTo(mutableSetOf()) { it.id } }
     LaunchedEffect(enterFocusToken) {
         if (enterFocusToken <= 0 || dedupedEpisodes.isEmpty()) return@LaunchedEffect
-        val index = dedupedEpisodes.indexOfFirst { it.id == enterEpisodeId }.coerceAtLeast(0)
-        val id = dedupedEpisodes[index].id
-        // Offscreen LazyRow items have no attached focus node. Compose the target
-        // before requesting focus instead of using an unattached requester.
-        lazyListState.scrollToItem(index)
-        repeat(EPISODE_RESTORE_FOCUS_ATTEMPTS) {
-            withFrameNanos { }
-            if (episodeFocusRequesters[id]?.requestFocusAfterFrames(frames = 1) == true) return@LaunchedEffect
+        val requestToken = enterFocusToken
+        try {
+            val index = dedupedEpisodes.indexOfFirst { it.id == enterEpisodeId }.coerceAtLeast(0)
+            val id = dedupedEpisodes[index].id
+            // Offscreen LazyRow items need composition before requesting focus.
+            lazyListState.scrollToItem(index)
+            repeat(EPISODE_RESTORE_FOCUS_ATTEMPTS) {
+                withFrameNanos { }
+                if (episodeFocusRequesters[id]?.requestFocusAfterFrames(frames = 1) == true) return@LaunchedEffect
+            }
+        } finally {
+            // Consume only this request; a newer remote request must survive cancellation.
+            onEnterFocusHandled(requestToken)
         }
     }
     LaunchedEffect(episodeIds, episodeFocusRequesters) {
