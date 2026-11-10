@@ -23,13 +23,24 @@ import javax.inject.Inject
 
 @HiltViewModel
 class OfflineDownloadStatusViewModel @Inject constructor(downloads: OfflineDownloads) : ViewModel() {
-    val keys = flow {
-        while (true) {
-            emit(runCatching { downloads.list().filter { downloads.ready(it) }.flatMap { it.identity?.keys().orEmpty() }.toSet() }.getOrDefault(emptySet()))
-            delay(2_000)
-        }
-    }.flowOn(Dispatchers.IO).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+    val keys = observeOfflineReadyKeys(downloads.readinessChanges(), downloads::readiness)
+        .flowOn(Dispatchers.IO).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 }
+
+internal fun observeOfflineReadyKeys(changesFlow: Flow<Unit>, read: () -> OfflineDownloads.Readiness): Flow<Set<String>> = flow {
+        kotlinx.coroutines.coroutineScope {
+            val changes = changesFlow.produceIn(this)
+            try {
+                while (true) {
+                    val state = runCatching { read() }.getOrNull()
+                    if (state != null) emit(state.keys)
+                    // Completion/index events refresh immediately. Stable files only need
+                    // a slow reconciliation for external deletions or a removed USB drive.
+                    kotlinx.coroutines.withTimeoutOrNull(if (state?.active == true) 2_000L else 30_000L) { changes.receive() }
+                }
+            } finally { changes.cancel() }
+        }
+    }.distinctUntilChanged()
 
 @Composable
 fun OfflineDownloadStatusProvider(content: @Composable () -> Unit) {

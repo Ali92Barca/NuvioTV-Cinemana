@@ -14,6 +14,8 @@ import java.net.URL
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.channels.awaitClose
 
 data class OfflineTransfer(val id: Long, val status: Int, val downloaded: Long, val total: Long)
 data class OfflineItem(val key: String, val title: String, val video: Long, val subtitles: List<Pair<Long, String>>,
@@ -30,14 +32,18 @@ data class OfflineItem(val key: String, val title: String, val video: Long, val 
 class OfflineDownloads @Inject constructor(@ApplicationContext private val context: Context) {
     private val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     private val prefs = context.getSharedPreferences("cinemana_offline_v1", Context.MODE_PRIVATE)
+    private var cachedItemsJson: String? = null
+    private var cachedItems: List<OfflineItem> = emptyList()
     private fun direct(raw: String): Uri {
         val uri = Uri.parse(raw)
         require(uri.scheme in listOf("http", "https") && !uri.host.isNullOrBlank()) { "التنزيل يحتاج رابط HTTP مباشر" }
         return uri
     }
     @Synchronized fun list(): List<OfflineItem> {
-        val array = JSONArray(prefs.getString("items", "[]"))
-        return (0 until array.length()).map { index ->
+        val raw = prefs.getString("items", "[]") ?: "[]"
+        if (raw == cachedItemsJson) return cachedItems
+        val array = JSONArray(raw)
+        val parsed = (0 until array.length()).map { index ->
             val item = array.getJSONObject(index)
             val tracks = item.getJSONArray("subtitles")
             OfflineItem(item.getString("key"), item.getString("title"), item.getLong("video"),
@@ -50,7 +56,57 @@ class OfflineDownloads @Inject constructor(@ApplicationContext private val conte
                 item.optString("releaseYear").takeIf { it.matches(Regex("(?:19|20)[0-9]{2}")) },
                 item.optString("downloadFolder").takeIf { it.isNotBlank() })
         }
+        cachedItemsJson = raw
+        cachedItems = parsed
+        return parsed
     }
+
+    internal data class Readiness(val keys: Set<String>, val active: Boolean)
+    /** One DownloadManager query for the whole badge snapshot; no full index reparse. */
+    internal fun readiness(): Readiness {
+        val items = list()
+        if (items.isEmpty()) return Readiness(emptySet(), false)
+        val ids = items.flatMap { listOf(it.video) + it.subtitles.map { track -> track.first } }.distinct()
+        val statuses = mutableMapOf<Long, Int>()
+        manager.query(DownloadManager.Query().setFilterById(*ids.toLongArray()))?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
+            val statusColumn = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
+            while (cursor.moveToNext()) statuses[cursor.getLong(idColumn)] = cursor.getInt(statusColumn)
+        }
+        val active = statuses.values.any { it in setOf(DownloadManager.STATUS_PENDING,
+            DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PAUSED) }
+        val keys = items.filter { item ->
+            !locationUnavailable(item) && (listOf(item.video) + item.subtitles.map { it.first }).all { id ->
+                statuses[id] == DownloadManager.STATUS_SUCCESSFUL && runCatching {
+                    context.contentResolver.openAssetFileDescriptor(uri(id), "r")?.use { true } ?: false
+                }.getOrDefault(false)
+            }
+        }.flatMap { it.identity?.keys().orEmpty() }.toSet()
+        return Readiness(keys, active)
+    }
+
+    internal fun readinessChanges(): kotlinx.coroutines.flow.Flow<Unit> = kotlinx.coroutines.flow.callbackFlow {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "items") trySend(Unit)
+        }
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: android.content.Intent?) { trySend(Unit) }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        try {
+            androidx.core.content.ContextCompat.registerReceiver(context, receiver,
+                android.content.IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+                androidx.core.content.ContextCompat.RECEIVER_EXPORTED)
+        } catch (error: Exception) {
+            prefs.unregisterOnSharedPreferenceChangeListener(listener)
+            throw error
+        }
+        trySend(Unit)
+        awaitClose {
+            prefs.unregisterOnSharedPreferenceChangeListener(listener)
+            context.unregisterReceiver(receiver)
+        }
+    }.buffer(kotlinx.coroutines.channels.Channel.CONFLATED)
     /** Exact parent identity only. Never guess titles, aliases or provider episode IDs. */
     fun detailsMeta(type: String, id: String): com.nuvio.tv.domain.model.Meta? {
         val series = type.lowercase() in setOf("series", "tv")

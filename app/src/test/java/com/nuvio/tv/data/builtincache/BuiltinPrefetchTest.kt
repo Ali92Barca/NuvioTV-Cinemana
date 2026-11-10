@@ -14,6 +14,36 @@ import retrofit2.Response
 import java.util.concurrent.atomic.AtomicInteger
 
 class BuiltinPrefetchTest {
+    @Test fun repeatedWarmRequestsReuseRecentSuccessButCancellationRemainsRetryable() = runBlocking {
+        val api = mockk<AddonApi>()
+        val repository = mockk<AddonRepository>()
+        val profiles = mockk<ProfileManager>()
+        val profile = MutableStateFlow(1)
+        every { profiles.activeProfileId } returns profile
+        val source = mockk<Addon> {
+            every { enabled } returns true
+            every { version } returns "1"
+            every { baseUrl } returns "https://cee.nuvio.invalid"
+        }
+        every { repository.getInstalledAddons() } returns flowOf(listOf(source))
+        coEvery { api.getStreams(any()) } returns Response.success(StreamResponseDto(listOf(
+            com.nuvio.tv.data.remote.dto.StreamDto(url = "https://media.example/video.mp4"))))
+        val warmer = BuiltinStreamPrefetcher(api, repository, profiles)
+        val target = listOf(BuiltinStreamPrefetcher.Target("movie", "tt1"))
+        warmer.warm(target); warmer.warm(target)
+        coVerify(exactly = 1) { api.getStreams(any()) }
+        profile.value = 2
+        warmer.warm(target, 2)
+        coVerify(exactly = 2) { api.getStreams(any()) }
+        val started = CompletableDeferred<Unit>()
+        coEvery { api.getStreams(match { it.contains("tt2") }) } coAnswers { started.complete(Unit); awaitCancellation() }
+        val next = listOf(BuiltinStreamPrefetcher.Target("movie", "tt2"))
+        val job = launch { warmer.warm(next, 2) }
+        started.await(); job.cancelAndJoin()
+        coEvery { api.getStreams(match { it.contains("tt2") }) } returns Response.success(StreamResponseDto(emptyList()))
+        warmer.warm(next, 2)
+        coVerify(exactly = 2) { api.getStreams(match { it.contains("tt2") }) }
+    }
     @Test fun warmsBothProvidersWithTwoRequestsAtMostAndSkipsUnsupportedIds() = runBlocking {
         val api = mockk<AddonApi>()
         val repository = mockk<AddonRepository>()
@@ -21,6 +51,7 @@ class BuiltinPrefetchTest {
         every { profiles.activeProfileId } returns MutableStateFlow(1)
         val addons = listOf("cee", "cinemana").map { name -> mockk<Addon> {
             every { enabled } returns true
+            every { version } returns "1"
             every { baseUrl } returns "https://$name.nuvio.invalid"
         } }
         every { repository.getInstalledAddons() } returns flowOf(addons)

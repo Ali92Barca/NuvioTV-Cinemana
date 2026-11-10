@@ -4,6 +4,7 @@ import com.nuvio.android.cinemana.CinemanaClient
 import com.nuvio.android.cinemana.CinemanaResourceAdapter
 import com.nuvio.android.cinemana.TmdbCredentials
 import com.nuvio.tv.BuildConfig
+import com.nuvio.tv.core.network.awaitProviderBody
 import com.nuvio.tv.data.remote.api.AddonApi
 import com.nuvio.tv.data.remote.dto.*
 import com.squareup.moshi.Moshi
@@ -31,10 +32,7 @@ class CinemanaAddonApi(
         networkInterceptors().clear()
     }.build()
     private suspend fun fetch(url: String): String = withContext(Dispatchers.IO) {
-        transport.newCall(Request.Builder().url(url).build()).execute().use { response ->
-            check(response.isSuccessful) { "Provider HTTP ${response.code}" }
-            requireNotNull(response.body).string()
-        }
+        transport.newCall(Request.Builder().url(url).build()).awaitProviderBody()
     }
     private val client = CinemanaClient(transport = ::fetch)
 

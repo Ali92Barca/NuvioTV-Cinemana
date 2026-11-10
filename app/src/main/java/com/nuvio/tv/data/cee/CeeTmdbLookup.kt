@@ -3,6 +3,7 @@ package com.nuvio.tv.data.cee
 import com.nuvio.android.cinemana.TmdbCredentials
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import com.nuvio.tv.core.network.awaitProviderBody
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -139,7 +140,7 @@ internal class CeeTmdbLookup(
         }.toMap()
     }
 
-    private fun resolveTmdbId(imdbId: String, key: String, series: Boolean): Int? {
+    private suspend fun resolveTmdbId(imdbId: String, key: String, series: Boolean): Int? {
         val json = fetchJson(
             "https://api.themoviedb.org/3/find/$imdbId" +
                 "?api_key=$key&external_source=imdb_id"
@@ -148,13 +149,8 @@ internal class CeeTmdbLookup(
             ?.optJSONObject(0)?.optInt("id")?.takeIf { it > 0 }
     }
 
-    private fun fetchJson(url: String): JSONObject {
+    private suspend fun fetchJson(url: String): JSONObject {
         val request = Request.Builder().url(url).get().build()
-        http.newCall(request).execute().use { response ->
-            check(response.isSuccessful) {
-                "TMDB HTTP ${response.code}"
-            }
-            return JSONObject(requireNotNull(response.body).string())
-        }
+        return JSONObject(http.newCall(request).awaitProviderBody())
     }
 }

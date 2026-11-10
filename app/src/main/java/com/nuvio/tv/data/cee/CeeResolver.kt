@@ -86,6 +86,9 @@ internal object CeeResolver {
     }
 
     private val imdbPattern = Regex("tt[0-9]+", RegexOption.IGNORE_CASE)
+    private data class Resolved(val at: Long, val id: String)
+    private val resolved = java.util.WeakHashMap<CeeClient, LinkedHashMap<Query, Resolved>>()
+    private val resolveLocks = Array(16) { kotlinx.coroutines.sync.Mutex() }
 
     private fun normalized(value: String?): String =
         value.orEmpty()
@@ -99,6 +102,21 @@ internal object CeeResolver {
         imdbPattern.find(value.orEmpty())?.value?.lowercase(Locale.ROOT)
 
     suspend fun resolve(client: CeeClient, query: Query): String? {
+        val stable = query.copy(seasonCounts = query.seasonCounts.toMap())
+        return resolveLocks[(System.identityHashCode(client).xor(stable.hashCode()) and Int.MAX_VALUE) % resolveLocks.size].withLock {
+            val cached = synchronized(resolved) { resolved[client]?.get(stable) }
+            if (cached != null && System.nanoTime() - cached.at < 300_000_000_000L) return@withLock cached.id
+            val id = resolveFresh(client, stable) ?: return@withLock null
+            synchronized(resolved) {
+                val entries = resolved.getOrPut(client) { LinkedHashMap(32, .75f, true) }
+                entries[stable] = Resolved(System.nanoTime(), id)
+                while (entries.size > 128) entries.remove(entries.keys.first())
+            }
+            id
+        }
+    }
+
+    private suspend fun resolveFresh(client: CeeClient, query: Query): String? {
         val keywords = listOfNotNull(
             query.arabicTitle?.trim()?.takeIf { it.isNotBlank() },
             query.englishTitle?.trim()?.takeIf { it.isNotBlank() }

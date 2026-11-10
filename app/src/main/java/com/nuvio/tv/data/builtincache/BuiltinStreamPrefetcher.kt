@@ -23,24 +23,37 @@ class BuiltinStreamPrefetcher @Inject constructor(
     private val profiles: ProfileManager,
 ) {
     data class Target(val type: String, val videoId: String)
-    private val permits = Semaphore(2)
+    private val permits = Semaphore(1)
+    private val recent = LinkedHashMap<String, Pair<Long, Long>>(64, .75f, true)
+    private fun isRecent(key: String): Boolean = synchronized(recent) {
+        recent[key]?.let { (at, ttl) -> System.nanoTime() - at < ttl } == true
+    }
+    private fun remember(key: String, success: Boolean) = synchronized(recent) {
+        recent[key] = System.nanoTime() to if (success) 300_000_000_000L else 30_000_000_000L
+        while (recent.size > 256) recent.remove(recent.keys.first())
+    }
 
     suspend fun warm(targets: List<Target>, expectedProfile: Int = profiles.activeProfileId.value) {
         if (profiles.activeProfileId.value != expectedProfile) return
-        val enabled = addons.getInstalledAddons().first().filter { it.enabled }.map { it.baseUrl.trimEnd('/') }.toSet()
+        val enabled = addons.getInstalledAddons().first().filter { it.enabled }
+            .associate { it.baseUrl.trimEnd('/') to it.version }
         coroutineScope {
             targets.distinct().flatMap { target ->
                 listOf("cinemana", "cee").mapNotNull { provider ->
                     val base = "https://$provider.nuvio.invalid"
-                    if (base !in enabled || !supports(provider, target)) null else async {
+                    val key = "$expectedProfile|$base|${enabled[base]}|${target.type}|${target.videoId}"
+                    if (base !in enabled || !supports(provider, target) || isRecent(key)) null else async {
                         permits.withPermit {
-                            if (profiles.activeProfileId.value != expectedProfile) return@withPermit
+                            if (profiles.activeProfileId.value != expectedProfile || isRecent(key)) return@withPermit
                             try {
                                 val url = "$base/stream/${encode(target.type)}/${encode(target.videoId)}.json"
-                                val response = withContext(BuiltinPrefetchMode) { api.getStreams(url) }
-                                Log.d("BuiltinPrefetch", "ready provider=$provider count=${response.body()?.streams?.size ?: 0}")
+                                val response = kotlinx.coroutines.withTimeoutOrNull(8_000) {
+                                    withContext(BuiltinPrefetchMode) { api.getStreams(url) }
+                                }
+                                remember(key, response?.isSuccessful == true && !response.body()?.streams.isNullOrEmpty())
+                                Log.d("BuiltinPrefetch", "ready provider=$provider count=${response?.body()?.streams?.size ?: 0}")
                             } catch (cancelled: CancellationException) { throw cancelled }
-                            catch (_: Exception) { /* Normal foreground requests remain available. */ }
+                            catch (_: Exception) { remember(key, false) }
                         }
                     }
                 }

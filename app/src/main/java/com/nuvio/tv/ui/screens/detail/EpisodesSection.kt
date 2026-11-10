@@ -128,7 +128,8 @@ fun SeasonTabs(
     selectedTabFocusRequester: FocusRequester,
     upFocusRequester: FocusRequester? = null,
     downFocusRequester: FocusRequester? = null,
-    isFocusEnabled: Boolean = true
+    isFocusEnabled: Boolean = true,
+    onEnterEpisodes: (() -> Unit)? = null
 ) {
     // Move season 0 (specials) to the end
     val sortedSeasons = remember(seasons) {
@@ -323,6 +324,10 @@ fun SeasonTabs(
                     .onPreviewKeyEvent { event ->
                         val native = event.nativeKeyEvent
                         if (native.action == AndroidKeyEvent.ACTION_DOWN) {
+                            if (isSelected && native.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN && onEnterEpisodes != null) {
+                                onEnterEpisodes()
+                                return@onPreviewKeyEvent true
+                            }
                             if (native.keyCode == AndroidKeyEvent.KEYCODE_MENU) {
                                 longPressTriggered = true
                                 onSeasonLongPress(season)
@@ -410,7 +415,9 @@ fun EpisodesRow(
     onScrollToEpisodeHandled: () -> Unit = {},
     anchorEpisodeId: String? = null,
     windowResetKey: String? = null,
-    offlineContentId: String? = null
+    offlineContentId: String? = null,
+    enterFocusToken: Int = 0,
+    enterEpisodeId: String? = null
 ) {
     val dedupedEpisodes = remember(episodes) { episodes.distinctBy { it.id } }
     var optionsEpisode by remember { mutableStateOf<Video?>(null) }
@@ -439,6 +446,18 @@ fun EpisodesRow(
     )
     var lastHorizontalKeyRepeatTime by remember { mutableStateOf(0L) }
     val episodeIds = remember(dedupedEpisodes) { dedupedEpisodes.mapTo(mutableSetOf()) { it.id } }
+    LaunchedEffect(enterFocusToken) {
+        if (enterFocusToken <= 0 || dedupedEpisodes.isEmpty()) return@LaunchedEffect
+        val index = dedupedEpisodes.indexOfFirst { it.id == enterEpisodeId }.coerceAtLeast(0)
+        val id = dedupedEpisodes[index].id
+        // Offscreen LazyRow items have no attached focus node. Compose the target
+        // before requesting focus instead of using an unattached requester.
+        lazyListState.scrollToItem(index)
+        repeat(EPISODE_RESTORE_FOCUS_ATTEMPTS) {
+            withFrameNanos { }
+            if (episodeFocusRequesters[id]?.requestFocusAfterFrames(frames = 1) == true) return@LaunchedEffect
+        }
+    }
     LaunchedEffect(episodeIds, episodeFocusRequesters) {
         episodeFocusRequesters.keys.retainAll(episodeIds)
     }

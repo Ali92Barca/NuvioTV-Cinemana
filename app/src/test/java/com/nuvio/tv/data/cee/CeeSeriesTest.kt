@@ -18,6 +18,13 @@ class CeeSeriesTest {
         val query = CeeResolver.Query(null, "مناعة", null, 2026, "series")
         assertEquals("1365884", CeeResolver.resolve(client, query))
         assertTrue(requests.any { it.contains("%D9%85%D9%86%D8%A7%D8%B9%D9%87") })
+        val count = requests.size
+        assertEquals("1365884", CeeResolver.resolve(client, query))
+        assertEquals(count, requests.size)
+        val otherClient = CeeClient(OkHttpClient()) { path ->
+            if (path.contains("page=0")) """[{"nb":"222","kind":"2","year":"2026","ar_title":"مناعة","rootSeries":"0"}]""" else "[]"
+        }
+        assertEquals("222", CeeResolver.resolve(otherClient, query))
     }
 
     @Test fun cinemanaEpisodeRequestPreservesRootAndEpisode() {

@@ -1,6 +1,7 @@
 package com.nuvio.tv.data.cee
 
 import kotlinx.coroutines.Dispatchers
+import com.nuvio.tv.core.network.awaitProviderBody
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -36,12 +37,7 @@ class CeeClient(
             .get()
             .build()
 
-        transport.newCall(request).execute().use { response ->
-            check(response.isSuccessful) {
-                "Cee API returned HTTP ${response.code}"
-            }
-            requireNotNull(response.body).string()
-        }
+        transport.newCall(request).awaitProviderBody()
     }
 
     suspend fun homeGroups(language: String = "ar"): JSONArray {

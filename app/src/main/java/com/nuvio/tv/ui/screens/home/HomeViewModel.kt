@@ -627,6 +627,8 @@ class HomeViewModel @Inject constructor(
         apiType = apiType
     )
 
+    internal val prefetchInput = MutableStateFlow(0L)
+    fun onHomeInput() { prefetchInput.value = System.nanoTime() }
     fun onItemFocus(item: MetaPreview) = onItemFocusPipeline(item)
 
     fun preloadAdjacentItem(item: MetaPreview) = preloadAdjacentItemPipeline(item)

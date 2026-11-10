@@ -2028,6 +2028,7 @@ private fun MetaDetailsContent(
     // Tracks whether the initial auto-scroll to the "next to play" episode has fired.
     // Once it fires, no more auto-scrolls happen for the lifetime of this detail screen.
     var initialEpisodeScrollDone by remember(meta.id) { mutableStateOf(false) }
+    var episodeEntryToken by remember(meta.id) { mutableStateOf(0) }
     val episodeFocusRequestersBySeason = remember(meta.id) { mutableMapOf<Int, MutableMap<String, FocusRequester>>() }
     val seasonEpisodeFocusRequesters = remember(selectedSeason, episodesForSeason) {
         val byEpisodeId = episodeFocusRequestersBySeason.getOrPut(selectedSeason) { mutableMapOf() }
@@ -2590,6 +2591,7 @@ private fun MetaDetailsContent(
                             selectedTabFocusRequester = selectedSeasonFocusRequester,
                             upFocusRequester = heroPlayFocusRequester,
                             downFocusRequester = seasonDownFocusRequester,
+                            onEnterEpisodes = if (episodesForSeason.isNotEmpty()) ({ episodeEntryToken++ }) else null,
                             isFocusEnabled = pendingRestoreType != RestoreTarget.EPISODE
                         )
                     }
@@ -2636,6 +2638,9 @@ private fun MetaDetailsContent(
                             upFocusRequester = if (showSeasonTabs) selectedSeasonFocusRequester else (heroPlayFocusRequester ?: heroPlayButtonFocusRequester),
                             downFocusRequester = episodesDownFocusRequester,
                             episodeFocusRequesters = seasonEpisodeFocusRequesters,
+                            enterFocusToken = episodeEntryToken,
+                            enterEpisodeId = visibleEpisodeRestoreId ?: lastFocusedEpisodeIdBySeason[selectedSeason]
+                                ?: nextToWatch?.nextVideoId,
                             restoreEpisodeId = visibleEpisodeRestoreId,
                             restoreFocusToken = if (pendingRestoreType == RestoreTarget.EPISODE) restoreFocusToken else 0,
                             onRestoreFocusHandled = {

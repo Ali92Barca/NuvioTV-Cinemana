@@ -5,6 +5,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.Flow
+
+internal suspend fun <T> collectHomeIdlePrefetch(targets: Flow<T>, input: Flow<Long>, warm: suspend (T) -> Unit) {
+    combine(targets, input) { batch, _ -> batch }.collectLatest { batch ->
+        delay(5_000)
+        warm(batch)
+    }
+}
 
 internal fun continueWatchingPrefetchTargets(items: List<ContinueWatchingItem>): List<Target> = buildList {
     fun addItem(type: String, video: String, content: String, season: Int?, episode: Int?) {
@@ -24,11 +32,11 @@ internal fun continueWatchingPrefetchTargets(items: List<ContinueWatchingItem>):
 
 /** Collected only while the home destination is resumed; profile/list changes cancel old work. */
 internal suspend fun HomeViewModel.prefetchContinueWatchingStreams() {
-    combine(uiState, profileManager.activeProfileId, addonRepository.getInstalledAddons()) { state, profile, addons ->
+    val targets = combine(uiState, profileManager.activeProfileId, addonRepository.getInstalledAddons()) { state, profile, addons ->
         Triple(profile, if (state.continueWatchingEnabled) continueWatchingPrefetchTargets(state.continueWatchingItems) else emptyList(),
             addons.filter { it.enabled }.map { it.baseUrl })
-    }.distinctUntilChanged().collectLatest { (profile, targets, _) ->
-        delay(2_000)
-        builtinStreamPrefetcher.warm(targets, profile)
+    }.distinctUntilChanged()
+    collectHomeIdlePrefetch(targets, prefetchInput) { (profile, items, _) ->
+        builtinStreamPrefetcher.warm(items, profile)
     }
 }
