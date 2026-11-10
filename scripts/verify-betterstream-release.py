@@ -12,7 +12,7 @@ apk = Path(sys.argv[1])
 tools = Path(os.environ['ANDROID_HOME']) / 'build-tools/36.0.0'
 badging = subprocess.run([str(tools / 'aapt'), 'dump', 'badging', str(apk)], check=True, capture_output=True, text=True).stdout
 assert "name='com.ali92barca.nuviotv'" in badging, 'Wrong package'
-assert "versionName='1.0.3'" in badging and "versionCode='7'" in badging, 'Wrong version'
+assert "versionName='1.0.4'" in badging and "versionCode='8'" in badging, 'Wrong version'
 assert 'application-debuggable' not in badging, 'Release must not be debuggable'
 configs = [p for p in Path('app/build/generated/source/buildConfig').rglob('BuildConfig.java') if 'release' in str(p).lower()]
 assert len(configs) == 1, 'Expected one release service configuration'
@@ -41,6 +41,6 @@ for cls, fields in schemas.items():
     missing = set(fields) - actual[cls]
     assert not missing, 'R8 storage fields missing/renamed: ' + cls + ': ' + ', '.join(sorted(missing))
 
-receipt = {'commit': os.environ.get('GITHUB_SHA'), 'package': 'com.ali92barca.nuviotv', 'versionName': '1.0.3', 'versionCode': 7, 'debuggable': False, 'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'registeredServices': required, 'stableStorageSchemas': list(schemas)}
+receipt = {'commit': os.environ.get('GITHUB_SHA'), 'package': 'com.ali92barca.nuviotv', 'versionName': '1.0.4', 'versionCode': 8, 'debuggable': False, 'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'registeredServices': required, 'stableStorageSchemas': list(schemas)}
 Path('release-candidate-verification.json').write_text(json.dumps(receipt, indent=2))
-print('Verified full registered Release 1.0.3, signing checked separately; all persisted JSON field names preserved by R8.')
+print('Verified full registered Release 1.0.4, signing checked separately; all persisted JSON field names preserved by R8.')
