@@ -63,6 +63,8 @@ class ExternalAddonBridgeTest {
         val native = VideoDto("xt_s_src_4768:1:1", title = "4K-AR - Game of Thrones (2011) (US) - S01E01 - Winter Is Coming",
             season = 1, episode = 1)
         assertTrue(bridge.compatible(expected, native, false, 10))
+        assertTrue(bridge.compatible(expected, native.copy(title = native.title!!.replace("Winter Is Coming", "(Original) Winter Is Coming")), false, 10))
+        assertTrue(bridge.compatible(expected, native.copy(title = native.title!!.replace("Winter Is Coming", "(Light Modified) Winter Is Coming")), false, 10))
         assertFalse(bridge.compatible(expected, native.copy(title = native.title!!.replace("S01E01", "S01E02")), false, 10))
         assertFalse(bridge.compatible(expected, native.copy(title = native.title!!.replace("Winter Is Coming", "The Kingsroad")), false, 10))
         assertFalse(bridge.compatible(expected, native.copy(released = "2011-04-24"), false, 10))
@@ -72,8 +74,8 @@ class ExternalAddonBridgeTest {
         org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())
         val source = seriesAddon().copy(resources = listOf(AddonResource("stream", listOf("series"), listOf("xt_"))))
         val native = MetaDto("xt_s_src_4768", "series", "Game of Thrones", tmdbId = "1399", videos = (1..10).map {
-            VideoDto("xt_s_src_4768:1:$it", title = "4K-AR - Game of Thrones - S01E$it - Original title $it", season = 1, episode = it)
-        }).toDomain("Episode")
+            VideoDto("xt_s_src_4768:1:$it", title = "4K-AR - Game of Thrones - S01E$it - ${if (it == 3) "(Original) " else ""}Original title $it", season = 1, episode = it)
+        } + VideoDto("xt_s_src_4768:1:3", title = "4K-AR - Game of Thrones - S01E3 - (Light Modified) Original title 3", season = 1, episode = 3)).toDomain("Episode")
         val identities = mockk<SharedPlaybackIdentity>(relaxed = true)
         every { identities.entries } returns kotlinx.coroutines.flow.MutableStateFlow<List<PlaybackIdentity>>(emptyList())
         every { identities.withWatchIdentity(any(), any()) } answers { firstArg() }
@@ -95,6 +97,12 @@ class ExternalAddonBridgeTest {
         coVerify(exactly = 1) { tmdb.getTvSeasonDetails(1399, 1, any(), "en-US") }
         verify { identities.learnExternalSeason(source.baseUrl, native.id, "tt0944947", 1, 1,
             match { it.size == 10 && it.first() == Triple(1, "xt_s_src_4768:1:1", 1) }, any(), any()) }
+        val conflicting = native.copy(videos = native.videos.dropLast(1) +
+            native.videos.last().copy(id = "xt_s_src_other:1:3"))
+        val rejected = ExternalAddonBridge(api, tmdb, identities, cache).enrichNative(source, conflicting)
+        assertEquals(9, rejected.verifiedPlaybackVideoIds?.size)
+        assertFalse(rejected.verifiedPlaybackVideoIds.orEmpty().contains("xt_s_src_4768:1:3"))
+        assertFalse(rejected.verifiedPlaybackVideoIds.orEmpty().contains("xt_s_src_other:1:3"))
     }
     @Test fun incompleteSeasonResponseDoesNotRevokeAnEstablishedDurableWork() = runBlocking {
         org.junit.Assume.assumeTrue(com.nuvio.tv.BuildConfig.TMDB_API_KEY.isNotBlank())

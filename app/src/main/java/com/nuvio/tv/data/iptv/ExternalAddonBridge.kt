@@ -219,12 +219,13 @@ class ExternalAddonBridge @Inject constructor(
                 val nativeSeason = if (partParent) partNumber!! else season
                 if (partParent) enrichNative(addon, native.toDomain("Episode"))
                 val completeSeason = canonical.videos.filter { it.season == season }
-                val nativeSeasonVideos = native.videos.orEmpty().filter { it.season == nativeSeason }
+                val sourceVideos = native.videos.orEmpty().distinctBy { Triple(it.id, it.season, it.episode) }
+                val nativeSeasonVideos = sourceVideos.filter { it.season == nativeSeason }
                 val airedNumbers = completeSeason.filter { it.available != false && isEpisodeReleaseAired(it.released) != false }
                     .mapNotNull { it.episode }.toSet()
                 val canonicalLayout = canonical.videos.filter { it.season != null }.groupBy { it.season!! }
                     .mapValues { (_, vs) -> vs.mapNotNull { it.episode }.toSet() }
-                val nativeLayout = native.videos.orEmpty().filter { it.season != null }.groupBy { it.season!! }
+                val nativeLayout = sourceVideos.filter { it.season != null }.groupBy { it.season!! }
                     .mapValues { (_, vs) -> vs.mapNotNull { it.episode } }
                 val strictMapping = ExternalEpisodeNumbering.episodeMap(canonicalLayout, nativeLayout,
                     season, nativeSeason, airedNumbers, info.arabic, info.turkish)
@@ -240,16 +241,16 @@ class ExternalAddonBridge @Inject constructor(
                     listOf(value), info.imdbId, info.tmdbId) !is ExternalAddonTitleMatcher.Decision.Matched) return null
                 val mapping = (if (relaxed && !partParent) sharedOriginalMap(info.tmdbId,
                     canonical.videos.filter { it.season != null }.groupBy { it.season!! }.mapValues { (_, vs) -> vs.mapNotNull { it.episode }.toSet() },
-                    native.videos.orEmpty().filter { it.season != null }.groupBy { it.season!! }.mapValues { (_, vs) -> vs.mapNotNull { it.episode } }, season, nativeSeason) else null)
+                    sourceVideos.filter { it.season != null }.groupBy { it.season!! }.mapValues { (_, vs) -> vs.mapNotNull { it.episode } }, season, nativeSeason) else null)
                     ?: ExternalEpisodeNumbering.episodeMap(
                     canonical.videos.filter { it.season != null }.groupBy { it.season!! }
                         .mapValues { (_, videos) -> videos.mapNotNull { it.episode }.toSet() },
-                    native.videos.orEmpty().filter { it.season != null }.groupBy { it.season!! }
+                    sourceVideos.filter { it.season != null }.groupBy { it.season!! }
                         .mapValues { (_, videos) -> videos.mapNotNull { it.episode } },
                     season, nativeSeason, airedNumbers, info.arabic, info.turkish)
                     ?: if (!partParent) verifiedSiblingMap(info.tmdbId,
                         canonical.videos.filter { it.season != null }.groupBy { it.season!! }.mapValues { (_, vs) -> vs.mapNotNull { it.episode }.toSet() },
-                        native.videos.orEmpty().filter { it.season != null }.groupBy { it.season!! }.mapValues { (_, vs) -> vs.mapNotNull { it.episode } },
+                        sourceVideos.filter { it.season != null }.groupBy { it.season!! }.mapValues { (_, vs) -> vs.mapNotNull { it.episode } },
                         season, nativeSeason, info.turkish, info.turkish && translatedEdition(addon, native.toDomain("Episode"))) else null
                 if (BuildConfig.DEBUG) android.util.Log.d("ExternalAddonBridge",
                     "Episode mapping turkish=${info.turkish} season=$season episode=$episode canonicalCount=${completeSeason.size} nativeCount=${nativeSeasonVideos.size} mapped=${mapping?.size ?: 0}")
@@ -334,7 +335,9 @@ class ExternalAddonBridge @Inject constructor(
     internal fun compatible(expected: Video, actual: VideoDto, arabic: Boolean, count: Int, turkish: Boolean = false): Boolean {
         if (actual.id.isBlank()) return false
         if (arabic || turkish) return true
-        val name = ExternalAddonTitleMatcher.normalize(actual.title ?: actual.name.orEmpty())
+        val label = (actual.title ?: actual.name.orEmpty()).replace(
+            Regex("(S[0-9]+\\s*E[0-9]+\\s*[-–:]?\\s*)\\((?:Original|Light\\s+Modified)\\)\\s*", RegexOption.IGNORE_CASE), "\$1")
+        val name = ExternalAddonTitleMatcher.normalize(label)
         val coordinates = Regex("(?:^| )s([0-9]+) ?e([0-9]+)(?: |$)").findAll(name).toList()
         if (coordinates.isNotEmpty() && (coordinates.size != 1 ||
                 coordinates.single().groupValues[1].toIntOrNull() != actual.season ||
@@ -499,7 +502,8 @@ class ExternalAddonBridge @Inject constructor(
                 val canonical = if (numberedPart) "tmdb:tv:${match.tmdbId}" else imdb ?: "tmdb:tv:${match.tmdbId}"
                 if (!numberedPart) identities.learnExternalCanonical(match.tmdbId.toString(), imdb)
                 val verified = mutableSetOf<String>()
-                val sourceSeasons = native.videos.filter { (it.season ?: 0) > 0 }.groupBy { it.season!! }
+                val sourceSeasons = native.videos.distinctBy { Triple(it.id, it.season, it.episode) }
+                    .filter { (it.season ?: 0) > 0 }.groupBy { it.season!! }
                 val canonicalSeasons = mutableMapOf<Int, Set<Int>>()
                 for ((season, videos) in sourceSeasons.entries.sortedBy { it.key }.take(30)) {
                     val complete = api.getTvSeasonDetails(match.tmdbId, season, BuildConfig.TMDB_API_KEY, "ar-SA")
