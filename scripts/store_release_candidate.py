@@ -45,6 +45,15 @@ for source, destination in [
         target = assets / destination
         shutil.copyfile(source, target)
         paths.append(target)
+if not debug:
+    for abi in ('armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'):
+        source = Path(f'app/build/outputs/apk/full/release/app-full-{abi}-release.apk')
+        if os.environ.get('CANDIDATE_BUILD_STATUS') == 'success':
+            assert source.is_file(), 'Missing release architecture: ' + abi
+        if source.is_file():
+            target = assets / f'NuvioTV-1.0.4-{abi}-{sha}.apk'
+            shutil.copyfile(source, target)
+            paths.append(target)
 reports = list(Path('app/build/test-results/testFullDebugUnitTest').glob('TEST-*.xml'))
 mapping = Path('app/build/outputs/mapping/fullRelease/mapping.txt')
 if reports or mapping.exists():
