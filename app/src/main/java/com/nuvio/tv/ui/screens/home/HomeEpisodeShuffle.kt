@@ -43,6 +43,16 @@ internal fun HomeViewModel.createShuffleHomeState(): StateFlow<HomeUiState> {
                     season = video.season, episode = video.episode, overview = video.overview, available = video.available)
             }
         }
+    }.combine(traktFriends) { state, row ->
+        if (row == null) state else state.copy(
+            catalogRows = listOf(row) + state.catalogRows,
+            gridItems = if (state.gridItems.firstOrNull() is GridItem.Hero) {
+                state.gridItems.take(1) + row.toFriendsGridItems() + state.gridItems.drop(1)
+            } else row.toFriendsGridItems() + state.gridItems,
+            homeRows = listOf(HomeRow.Catalog(row)) + state.homeRows.ifEmpty {
+                state.catalogRows.filter { it.items.isNotEmpty() }.map { HomeRow.Catalog(it) }
+            }
+        )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, HomeUiState())
 }
 

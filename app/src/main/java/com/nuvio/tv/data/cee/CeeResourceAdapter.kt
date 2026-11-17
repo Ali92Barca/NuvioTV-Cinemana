@@ -98,6 +98,8 @@ class CeeResourceAdapter(
         startYear: Int = 1900,
         endYear: Int = java.time.Year.now().value + 1,
         category: String? = null,
+        sort: String? = null,
+        language: String? = null,
     ): CatalogResponseDto {
         val items = when (catalogId) {
             MOVIES_CATALOG -> client.latestMovies(page)
@@ -107,14 +109,18 @@ class CeeResourceAdapter(
                 page = page,
                 startYear = startYear,
                 endYear = endYear,
-                category = category
+                category = category,
+                sort = sort,
+                language = language
             )
             DISCOVER_SERIES_CATALOG -> client.discover(
                 series = true,
                 page = page,
                 startYear = startYear,
                 endYear = endYear,
-                category = category
+                category = category,
+                sort = sort,
+                language = language
             )
             else -> return CatalogResponseDto()
         }

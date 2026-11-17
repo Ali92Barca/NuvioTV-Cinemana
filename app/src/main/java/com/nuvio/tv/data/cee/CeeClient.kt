@@ -107,12 +107,30 @@ class CeeClient(
         startYear: Int = 1900,
         endYear: Int = java.time.Year.now().value + 1,
         category: String? = null,
-
+        sort: String? = null,
+        language: String? = null,
     ): JSONArray {
         require(startYear in 1900..2100 && endYear in startYear..2100) {
             "Invalid Cee year range"
         }
         val genre = category?.trim()?.takeIf { it.isNotEmpty() }
+        val order = sort?.takeIf { it in CeeDiscoverFilters.sortKeys }
+        val categoryId = CeeDiscoverFilters.categoryId(genre)
+        val kind = if (series) 2 else 1
+        if (order != null && categoryId != null) {
+            val languageId = language?.takeIf { id ->
+                CeeDiscoverFilters.languages(genre).any { it.id == id && (if (series) it.series else it.movies) > 0 }
+            }
+            val path = if (languageId == null) {
+                "videosByCategory?categoryID=$categoryId&orderby=$order&videoKind=$kind&offset=${page * 30}&level=0"
+            } else {
+                "videosByCategoryAndLanguage?category_id=$categoryId&language_id=$languageId&videoKind=$kind&orderby=$order&level=0&offset=${page * 30}"
+            }
+            return discoverItems(fetch(path))
+        }
+        if (order != null && genre == null && order !in setOf("title_asc", "title_desc")) {
+            return discoverItems(fetch("video/V/2/itemsPerPage/30/level/0/videoKind/$kind/sortParam/$order/pageNumber/$page"))
+        }
         val categoryArg = genre?.let {
             "&category=${java.net.URLEncoder.encode(it, "UTF-8")}"
         } ?: ""
@@ -122,10 +140,17 @@ class CeeClient(
                     "&page=${page.coerceAtLeast(0)}" +
                     "&year=$startYear%2C$endYear" +
                     "&type=${if (series) "series" else "movies"}" +
-                    categoryArg
+                    categoryArg + (order?.let { "&orderby=$it" } ?: "")
             )
         )
     }
+    private fun discoverItems(body: String): JSONArray {
+        if (body.trimStart().startsWith("[")) return JSONArray(body)
+        val response = JSONObject(body)
+        return listOf("info", "videos", "results", "data")
+            .firstNotNullOfOrNull { response.optJSONArray(it) } ?: JSONArray()
+    }
+
     private fun requireVideoId(id: String): String {
         require(id.matches(numericVideoIdPattern)) {
             "Invalid Cee video ID"

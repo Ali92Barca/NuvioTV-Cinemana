@@ -73,7 +73,7 @@ class CinemanaResourceAdapter(
                     }
                     id == "cinemana_all" || id == "cinemana_all_series" -> {
                         val skip = (extra["skip"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
-                        client.allCatalogPage(type == "series", skip / 12, extra["year"])
+                        client.allCatalogPage(type == "series", skip / 30, extra["year"], sort = extra["sort"] ?: "desc")
                     }
                     else -> {
                         val category = CinemanaCatalogs.category(id) ?: error("Unknown Cinemana catalog")
@@ -82,9 +82,14 @@ class CinemanaResourceAdapter(
                         if (year != null) {
                             client.allCatalogPage(
                                 type == "series",
-                                skip / 12,
+                                skip / 30,
                                 year,
-                                category.remoteIds
+                                category.remoteIds.replace("97,84", "84")
+                            )
+                        } else if (extra["sort"] != null || extra["language"] != null) {
+                            client.discoverCategoryPage(
+                                category.remoteIds.replace("97,84", "84"),
+                                type == "series", skip, extra["sort"] ?: "desc", extra["language"]
                             )
                         } else {
                             client.catalogPage(

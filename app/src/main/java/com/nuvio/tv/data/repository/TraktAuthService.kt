@@ -121,6 +121,20 @@ class TraktAuthService @Inject constructor(
         return BuildConfig.TRAKT_CLIENT_ID.isNotBlank()
     }
 
+    internal val socialAuthState get() = traktAuthDataStore.state
+
+    internal suspend fun socialActivity(path: String): Response<okhttp3.ResponseBody>? {
+        val token = getValidAccessToken() ?: return null
+        // A 401 from a social route can mean missing scope. Keep it out of the
+        // shared history/Trakt authentication circuit breaker.
+        acquireGetRateSlot()
+        return try {
+            traktApi.socialActivity(path, "Bearer $token")
+        } catch (_: IOException) {
+            null
+        }
+    }
+
     suspend fun getCurrentAuthState(): TraktAuthState = traktAuthDataStore.getCurrentState()
 
     suspend fun startDeviceAuth(): Result<TraktDeviceCodeResponseDto> {

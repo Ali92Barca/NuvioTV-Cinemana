@@ -33,12 +33,14 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun NuvioEnhancedSettingsContent(
     initialFocusRequester: FocusRequester?,
-    playback: PlaybackSettingsViewModel = hiltViewModel()
+    playback: PlaybackSettingsViewModel = hiltViewModel(),
+    trakt: TraktViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val policy = remember(context) { NuvioCachePolicy(context.applicationContext) }
     val player by playback.playerSettings.collectAsStateWithLifecycle(initialValue = null)
     val scope = rememberCoroutineScope()
+    val showFriends by trakt.showFriendsOnHome.collectAsStateWithLifecycle(initialValue = null)
     var conservative by remember { mutableStateOf(policy.conservativeRam) }
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md)) {
         item {
@@ -63,6 +65,15 @@ internal fun NuvioEnhancedSettingsContent(
                     conservative = !conservative
                     policy.conservativeRam = conservative
                 }
+            )
+        }
+        item {
+            SettingsToggleRow(
+                title = stringResource(R.string.trakt_friends_home),
+                subtitle = stringResource(R.string.trakt_friends_home_setting),
+                checked = showFriends == true,
+                enabled = showFriends != null,
+                onToggle = { showFriends?.let { trakt.setShowFriendsOnHome(!it) } }
             )
         }
         item { BuiltinPosterLanguagePreference() }

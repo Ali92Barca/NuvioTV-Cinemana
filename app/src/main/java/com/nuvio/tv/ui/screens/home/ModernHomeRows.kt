@@ -268,6 +268,7 @@ private fun ModernCatalogRowItem(
     }
 
     val metaPreview = item.metaPreview
+    val isFriendCard = metaPreview?.friendActivity != null
     val isWatched = metaPreview?.let { isCatalogItemWatched(it) } ?: false
     val enrichedMeta by remember {
         derivedStateOf { (payload as? ModernPayload.Catalog)?.itemId?.let { enrichedPreviews.value.map[it] } }
@@ -381,7 +382,7 @@ private fun ModernCatalogRowItem(
 
     ModernCarouselCard(
         item = item,
-        useLandscapeOverlayTreatment = useLandscapePosters,
+        useLandscapeOverlayTreatment = useLandscapePosters || isFriendCard,
         alwaysShowLandscapeClearlogo = alwaysShowLandscapeClearlogo,
         showLabels = showLabels,
         placeholderShimmerOffsetState = placeholderShimmerOffsetState,
@@ -389,9 +390,9 @@ private fun ModernCatalogRowItem(
         cardWidth = cardMetrics.width,
         cardHeight = cardMetrics.height,
         modifier = modifier,
-        focusedPosterBackdropExpandEnabled = effectiveExpandEnabled,
-        isBackdropExpanded = effectiveBackdropExpanded,
-        playTrailerInExpandedCard = playTrailerInExpandedCard,
+        focusedPosterBackdropExpandEnabled = effectiveExpandEnabled && !isFriendCard,
+        isBackdropExpanded = effectiveBackdropExpanded && !isFriendCard,
+        playTrailerInExpandedCard = playTrailerInExpandedCard && !isFriendCard,
         focusedPosterBackdropTrailerMuted = focusedPosterBackdropTrailerMuted,
         trailerPreviewUrl = trailerPreviewUrl,
         trailerPreviewAudioUrl = trailerPreviewAudioUrl,
@@ -1266,7 +1267,8 @@ private fun ModernCarouselCard(
     // Use the image model directly — Coil's memory cache handles repeated
     // requests efficiently without needing scroll-aware request swapping.
     val hasImage = !imageUrl.isNullOrBlank()
-    val hasLandscapeLogo =
+    val friendActivity = item.metaPreview?.friendActivity
+    val hasLandscapeLogo = friendActivity == null &&
         (useLandscapeOverlayTreatment || isBackdropExpanded) &&
             !isCollectionFolder &&
             !effectiveLogoUrl.isNullOrBlank() &&
@@ -1484,7 +1486,10 @@ private fun ModernCarouselCard(
                     }
                 }
 
-                if (hasLandscapeLogo) {
+                if (friendActivity != null) {
+                    com.nuvio.tv.ui.components.FriendActivityCardTitle(item.title, Modifier.align(Alignment.BottomStart))
+                    com.nuvio.tv.ui.components.FriendActivityAvatar(friendActivity, Modifier.align(Alignment.TopStart))
+                } else if (hasLandscapeLogo) {
                     AsyncImage(
                         model = logoModel,
                         contentDescription = item.title,
@@ -1524,7 +1529,9 @@ private fun ModernCarouselCard(
             }
         }
 
-        if (showLabels && !isBackdropExpanded && item.title.isNotBlank()) {
+        if (friendActivity != null) {
+            com.nuvio.tv.ui.components.FriendActivityLabels(friendActivity)
+        } else if (showLabels && !isBackdropExpanded && item.title.isNotBlank()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()

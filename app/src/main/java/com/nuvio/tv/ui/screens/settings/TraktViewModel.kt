@@ -60,6 +60,12 @@ class TraktViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(TraktUiState())
     val uiState: StateFlow<TraktUiState> = _uiState.asStateFlow()
 
+    val showFriendsOnHome = traktSettingsDataStore.showFriendsOnHome
+
+    fun setShowFriendsOnHome(enabled: Boolean) {
+        viewModelScope.launch { traktSettingsDataStore.setShowFriendsOnHome(enabled) }
+    }
+
     private var connectJob: Job? = null
     private var pollJob: Job? = null
     private var lastMode: TraktConnectionMode? = null

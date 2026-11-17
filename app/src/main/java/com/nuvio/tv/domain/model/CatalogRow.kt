@@ -23,6 +23,8 @@ data class CatalogRow(
     val consecutiveDuplicatePages: Int = 0,
     val extraArgs: Map<String, String> = emptyMap()
 ) {
+    val isTraktFriends: Boolean get() = addonId == "org.nuvio.trakt" && catalogId == "friends"
+
     val apiType: String
         get() = rawType.trim().ifBlank { type.toApiString() }
 }

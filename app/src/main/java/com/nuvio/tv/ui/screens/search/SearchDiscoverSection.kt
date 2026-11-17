@@ -223,8 +223,6 @@ internal fun DiscoverSection(
             )
         }
 
-        val isCinemanaProvider = selectedCatalog?.addonBaseUrl
-            ?.contains("cinemana.nuvio.invalid", ignoreCase = true) == true
         val isBuiltInProvider = selectedCatalog?.addonBaseUrl?.let {
             it.contains("cinemana.nuvio.invalid", ignoreCase = true) ||
                 it.contains("cee.nuvio.invalid", ignoreCase = true)
@@ -238,7 +236,7 @@ internal fun DiscoverSection(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md)
             ) {
-                if (isCinemanaProvider && uiState.selectedDiscoverGenre != null && uiState.selectedDiscoverYear == null) {
+                if (isBuiltInProvider && uiState.selectedDiscoverGenre != null && uiState.selectedDiscoverYear == null) {
                     val languageOptions = uiState.cinemanaLanguages
                         .mapNotNull { language ->
                             val count = if (uiState.selectedDiscoverType == "series") {
@@ -280,7 +278,7 @@ internal fun DiscoverSection(
                         modifier = Modifier.weight(1f),
                         title = "Year",
                         enabled = selectedCatalog.yearOptions.isNotEmpty(),
-                        value = uiState.selectedDiscoverYear ?: "All",
+                        value = uiState.selectedDiscoverYear?.replace(",", "–") ?: "All",
                         selectedValue = uiState.selectedDiscoverYear ?: "__default__",
                         expanded = expandedPicker == "year",
                         options = buildList {
@@ -296,12 +294,12 @@ internal fun DiscoverSection(
                     )
                 }
 
-                if ((isCinemanaProvider || selectedCatalog.sortOptions.isNotEmpty()) && (!isBuiltInProvider || uiState.selectedDiscoverYear == null) && (!isCinemanaProvider || (selectedCatalog.catalogId !in setOf("cinemana_all", "cinemana_all_series") && uiState.selectedDiscoverGenre !in setOf("cinemana_all", "cinemana_all_series")))) {
+                if ((isBuiltInProvider || selectedCatalog.sortOptions.isNotEmpty()) && (!isBuiltInProvider || uiState.selectedDiscoverYear == null)) {
                     DiscoverDropdownPicker(
                         modifier = Modifier.weight(1f),
-                        title = if (isCinemanaProvider) "رتب" else "Sort",
-                        enabled = if (isCinemanaProvider) true else selectedCatalog.sortOptions.isNotEmpty(),
-                        value = if (isCinemanaProvider) {
+                        title = if (isBuiltInProvider) "رتب" else "Sort",
+                        enabled = isBuiltInProvider || selectedCatalog.sortOptions.isNotEmpty(),
+                        value = if (isBuiltInProvider) {
                             when (uiState.selectedDiscoverSort ?: "desc") {
                                 "desc" -> "تاريخ الإضافة ↓"
                                 "asc" -> "تاريخ الإضافة ↑"
@@ -318,9 +316,9 @@ internal fun DiscoverSection(
                                 else -> "تاريخ الإضافة ↓"
                             }
                         } else uiState.selectedDiscoverSort ?: "Default",
-                        selectedValue = uiState.selectedDiscoverSort ?: if (isCinemanaProvider) "desc" else "__default__",
+                        selectedValue = uiState.selectedDiscoverSort ?: if (isBuiltInProvider) "desc" else "__default__",
                         expanded = expandedPicker == "sort",
-                        options = if (isCinemanaProvider) {
+                        options = if (isBuiltInProvider) {
                             listOf(
                                 DiscoverOption("تاريخ الإضافة", "desc", "down"),
                                 DiscoverOption("تاريخ الإضافة", "asc", "up"),
@@ -334,7 +332,11 @@ internal fun DiscoverSection(
                                 DiscoverOption("التصنيف العمري", "rating_asc", "up"),
                                 DiscoverOption("الترتيب الأبجدي", "title_asc", "up"),
                                 DiscoverOption("الترتيب الأبجدي", "title_desc", "down")
-                            )
+                            ).filter { option ->
+                                uiState.selectedDiscoverGenre != null &&
+                                    uiState.selectedDiscoverGenre !in setOf("cinemana_all", "cinemana_all_series") ||
+                                    option.value !in setOf("title_asc", "title_desc")
+                            }
                         } else buildList {
                             add(DiscoverOption("Default", "__default__"))
                             addAll(selectedCatalog.sortOptions.map { DiscoverOption(it, it) })
@@ -406,7 +408,7 @@ internal fun DiscoverSection(
                     onItemLongPress = { item ->
                         onItemLongPress(item, selectedCatalog?.addonBaseUrl ?: "")
                     },
-                    filterKey = "${uiState.selectedDiscoverType}|${uiState.selectedDiscoverCatalogKey}|${uiState.selectedDiscoverGenre}|${uiState.selectedDiscoverYear}|${uiState.selectedDiscoverSort}"
+                    filterKey = "${uiState.selectedDiscoverType}|${uiState.selectedDiscoverCatalogKey}|${uiState.selectedDiscoverGenre}|${uiState.selectedDiscoverYear}|${uiState.selectedDiscoverSort}|${uiState.selectedDiscoverLanguage}"
                 )
                 }
             }

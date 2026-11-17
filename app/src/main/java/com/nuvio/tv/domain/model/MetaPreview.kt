@@ -38,7 +38,8 @@ data class MetaPreview(
     val voteCount: Int? = null,
     val sourceAddonBaseUrl: String? = null,
     val mdbListRatings: MDBListRatings? = null,
-    val mdbListRatingOrder: List<String> = MDBListSettings.DEFAULT_RATING_ORDER
+    val mdbListRatingOrder: List<String> = MDBListSettings.DEFAULT_RATING_ORDER,
+    val friendActivity: FriendActivityDisplay? = null
 ) {
     val apiType: String
         get() = type.toApiString(rawType)
@@ -46,3 +47,12 @@ data class MetaPreview(
     val backdropUrl: String?
         get() = background ?: landscapePoster ?: poster
 }
+
+@Immutable
+data class FriendActivityDisplay(
+    val name: String,
+    val watching: Boolean,
+    val episode: String?,
+    val avatarUrl: String?,
+    val timestamp: String?
+)

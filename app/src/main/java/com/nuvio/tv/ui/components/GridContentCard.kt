@@ -86,7 +86,8 @@ fun GridContentCard(
     val cardShape = remember(posterCardStyle.cornerRadius) { RoundedCornerShape(posterCardStyle.cornerRadius) }
     val cardDepthStyle = LocalCardDepthStyle.current
     val density = LocalDensity.current
-    val globalLandscape = LocalLandscapePosterMode.current
+    val friendActivity = item.friendActivity
+    val globalLandscape = LocalLandscapePosterMode.current || friendActivity != null
     val effectivePosterShape = if (globalLandscape) PosterShape.LANDSCAPE else item.posterShape
 
     // Derive card height from item's posterShape aspect ratio while keeping width from posterCardStyle.
@@ -293,7 +294,7 @@ fun GridContentCard(
                             onError = { landscapeLogoFailed = true }
                         )
                     }
-                } else if (isLandscapeBackdropCard && !showLandscapeClearlogo && !showLabel) {
+                } else if (friendActivity == null && isLandscapeBackdropCard && !showLandscapeClearlogo && !showLabel) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -357,6 +358,10 @@ fun GridContentCard(
                     com.nuvio.tv.data.offline.OfflineMediaIdentity(item.apiType, item.id, item.id, null, null, setOfNotNull(item.imdbId)),
                     Modifier.align(Alignment.TopStart).padding(8.dp)
                 )
+                if (friendActivity != null) {
+                    FriendActivityCardTitle(item.name, Modifier.align(Alignment.BottomStart))
+                    FriendActivityAvatar(friendActivity, Modifier.align(Alignment.TopStart))
+                }
                 if (builtinPoster.watched ?: isWatched) {
                     WatchedMarker(
                         modifier = Modifier
@@ -368,7 +373,9 @@ fun GridContentCard(
             }
         }
 
-        if (showLabel && (!showLogo || item.logo.isNullOrBlank())) {
+        if (friendActivity != null) {
+            FriendActivityLabels(friendActivity, Modifier.padding(top = NuvioTheme.spacing.sm))
+        } else if (showLabel && (!showLogo || item.logo.isNullOrBlank())) {
             FocusMarqueeText(
                 text = item.name,
                 focused = isFocused,

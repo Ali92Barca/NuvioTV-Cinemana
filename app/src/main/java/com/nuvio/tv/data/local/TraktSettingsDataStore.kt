@@ -15,6 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
@@ -76,6 +77,18 @@ class TraktSettingsDataStore @Inject constructor(
     private val rememberedLibrarySourceModeKey = stringPreferencesKey("remembered_library_source_mode")
     private val moreLikeThisSourceKey = stringPreferencesKey("more_like_this_source")
     private val simklAnimeIdPreferenceKey = stringPreferencesKey("simkl_anime_id_preference")
+
+    private val showFriendsOnHomeKey = booleanPreferencesKey("show_friends_on_home")
+
+    fun observeShowFriendsOnHome(profileId: Int): Flow<Boolean> =
+        store(profileId).data.map { it[showFriendsOnHomeKey] ?: true }.distinctUntilChanged()
+
+    val showFriendsOnHome: Flow<Boolean> =
+        profileManager.activeProfileId.flatMapLatest(::observeShowFriendsOnHome)
+
+    suspend fun setShowFriendsOnHome(enabled: Boolean) {
+        store().edit { it[showFriendsOnHomeKey] = enabled }
+    }
 
     val continueWatchingDaysCap: Flow<Int> = profileManager.activeProfileId.flatMapLatest { pid ->
         factory.get(pid, FEATURE).data.map { prefs ->

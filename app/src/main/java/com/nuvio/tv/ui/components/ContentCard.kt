@@ -119,7 +119,8 @@ fun ContentCard(
     val portraitUrl = builtinPoster.url ?: item.poster
     val cardShape = remember(posterCardStyle.cornerRadius) { RoundedCornerShape(posterCardStyle.cornerRadius) }
     val cardDepthStyle = LocalCardDepthStyle.current
-    val globalLandscape = LocalLandscapePosterMode.current
+    val friendActivity = item.friendActivity
+    val globalLandscape = LocalLandscapePosterMode.current || friendActivity != null
     val effectivePosterShape = if (globalLandscape) PosterShape.LANDSCAPE else item.posterShape
     val baseCardWidth = when (effectivePosterShape) {
         PosterShape.POSTER -> posterCardStyle.width
@@ -133,7 +134,7 @@ fun ContentCard(
     }
     // Landscape cards are already 16:9 — expanded width equals base width (no size change).
     val expandedCardWidth = if (globalLandscape) baseCardWidth else baseCardHeight * BACKDROP_ASPECT_RATIO
-    val effectiveExpandEnabled = focusedPosterBackdropExpandEnabled
+    val effectiveExpandEnabled = focusedPosterBackdropExpandEnabled && friendActivity == null
 
     var isFocused by remember { mutableStateOf(false) }
     var longPressTriggered by remember { mutableStateOf(false) }
@@ -556,7 +557,7 @@ fun ContentCard(
                 // Landscape overlay — rendered AFTER trailer so it stays on top.
                 // Show on backdrop cards always; also show on any landscape card when expanded
                 // (trailer playing) so the logo stays visible over the video.
-                val showLandscapeOverlay = globalLandscape && (isLandscapeBackdropCard || isBackdropExpanded) &&
+                val showLandscapeOverlay = friendActivity == null && globalLandscape && (isLandscapeBackdropCard || isBackdropExpanded) &&
                     !(useLandscapeAsExpanded && !trailerFirstFrameRendered)
                 val showLandscapeLogoOverlay = showLandscapeOverlay &&
                     !item.logo.isNullOrBlank() && !logoLoadFailed
@@ -636,6 +637,11 @@ fun ContentCard(
                         .zIndex(2f)
                 )
 
+                if (friendActivity != null) {
+                    FriendActivityCardTitle(item.name, Modifier.align(Alignment.BottomStart))
+                    FriendActivityAvatar(friendActivity, Modifier.align(Alignment.TopStart))
+                }
+
                 if (builtinPoster.watched ?: isWatched) {
                     WatchedMarker(
                         modifier = Modifier
@@ -650,7 +656,9 @@ fun ContentCard(
         // When backdrop expand is enabled, both the labels state and the
         // expanded state share a single Column with a fixed minimum height
         // so the row never shifts vertically during the expand transition.
-        if (showLabels) {
+        if (friendActivity != null) {
+            FriendActivityLabels(friendActivity, Modifier.padding(top = NuvioTheme.spacing.sm))
+        } else if (showLabels) {
             Box(modifier = Modifier.fillMaxWidth().clipToBounds().graphicsLayer {}) {
             Column(
                 modifier = Modifier

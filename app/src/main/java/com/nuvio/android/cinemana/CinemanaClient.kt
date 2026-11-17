@@ -187,7 +187,7 @@ class CinemanaClient(
      * Fetch one native Cinemana All page. The API uses page numbers,
      * unlike category catalogs which use opaque offsets.
      */
-    suspend fun allCatalogPage(series: Boolean, page: Int, yearRange: String? = null, categoryId: String? = null): List<Entry> {
+    suspend fun allCatalogPage(series: Boolean, page: Int, yearRange: String? = null, categoryId: String? = null, sort: String = "desc"): List<Entry> {
         if (page !in 0..500) return emptyList()
 
         val type = if (series) "series" else "movies"
@@ -198,8 +198,37 @@ class CinemanaClient(
         val startYear = years.firstOrNull()?.takeIf { it in 1900..2100 } ?: 1900
         val endYear = years.getOrNull(1)?.takeIf { it in startYear..2100 }
             ?: if (years.isNotEmpty()) startYear else Year.now().value + 1
-        val path = "/api/android/AdvancedSearch?level=0&category_id=${enc(categoryId.orEmpty())}&type=$type&page=$page&year=$startYear%2C$endYear"
+        val global = yearRange.isNullOrBlank() && categoryId == null
+        val path = when {
+            global && sort in setOf("desc", "asc", "r_desc", "r_asc", "stars_desc", "stars_asc",
+                "views_desc", "views_asc", "rating_desc", "rating_asc") ->
+                "/api/android/video/V/2/itemsPerPage/30/level/0/videoKind/${if (series) 2 else 1}/sortParam/$sort/pageNumber/$page"
+            global && sort in setOf("title_asc", "title_desc") ->
+                "/api/android/AdvancedSearch?level=0&staffTitle=&page=$page&year=$startYear%2C$endYear&type=$type&videoTitle=&orderby=$sort"
+            categoryId != null ->
+                "/api/android/AdvancedSearch?level=0&category_id=${enc(categoryId)}&type=$type&page=$page&year=$startYear%2C$endYear"
+            else ->
+                "/api/android/AdvancedSearch?level=0&staffTitle=&page=$page&year=$startYear%2C$endYear&type=$type&videoTitle="
+        }
 
+        return discoverEntries(path, series)
+    }
+
+    suspend fun discoverCategoryPage(
+        category: String, series: Boolean, offset: Int, sort: String, language: String?
+    ): List<Entry> {
+        val kind = if (series) 2 else 1
+        val order = sort.takeIf { it in setOf("desc", "asc", "r_desc", "r_asc", "stars_desc",
+            "stars_asc", "views_desc", "views_asc", "rating_desc", "rating_asc", "title_asc", "title_desc") } ?: "desc"
+        val path = if (language.isNullOrBlank()) {
+            "/api/android/videosByCategory?categoryID=${enc(category)}&orderby=$order&videoKind=$kind&offset=$offset&level=0"
+        } else {
+            "/api/android/videosByCategoryAndLanguage?category_id=${enc(category)}&language_id=${enc(language)}&videoKind=$kind&orderby=$order&level=0&offset=$offset"
+        }
+        return discoverEntries(path, series)
+    }
+
+    private suspend fun discoverEntries(path: String, series: Boolean): List<Entry> {
         val records = items(get(path))
         records.forEach(::rememberInfo)
         val entries = linkedMapOf<String, Entry>()

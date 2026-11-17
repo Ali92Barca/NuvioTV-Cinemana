@@ -473,6 +473,7 @@ class HomeEnrichmentRetryTest {
             cwEnrichmentCache = cwEnrichmentCache,
             profileManager = profileManager,
             tvRecommendationManager = mockk(relaxed = true),
+            traktAuthService = mockk(relaxed = true),
             serverCatalog = mockk(relaxed = true)
         )
         // The pipeline defers everything while the startup grace period is active, and TMDB is

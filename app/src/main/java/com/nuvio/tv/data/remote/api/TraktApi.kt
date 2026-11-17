@@ -47,6 +47,12 @@ import retrofit2.http.PUT
 import retrofit2.http.Query
 
 interface TraktApi {
+    @GET
+    suspend fun socialActivity(
+        @retrofit2.http.Url path: String,
+        @retrofit2.http.Header("Authorization") authorization: String
+    ): Response<okhttp3.ResponseBody>
+
 
     @POST("https://auth.trakt.tv/oauth/device/code")
     suspend fun requestDeviceCode(

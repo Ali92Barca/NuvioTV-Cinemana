@@ -1068,7 +1068,7 @@ class SearchViewModel @Inject constructor(
                         catalogName = "Cinemana",
                         type = type,
                         genres = (listOf(if (type == "series") "cinemana_all_series" else "cinemana_all") + categories.map { it.id }).distinct(),
-                        yearOptions = (1950..2027).reversed().map { it.toString() },
+                        yearOptions = (1900..java.time.Year.now().value + 1).reversed().map { it.toString() },
                         supportsSkip = first.supportsExtra("skip"),
                         skipStep = 12
                     )
@@ -1205,7 +1205,9 @@ class SearchViewModel @Inject constructor(
             "title_asc", "title_desc"
         )
         if (value != null && value !in options &&
-            !(isCinemanaSort && value in cinemanaSortKeys)
+            !(isCinemanaSort && value in cinemanaSortKeys) &&
+            !(name == "sort" && catalog.addonBaseUrl.contains("cee.nuvio.invalid") &&
+                value in com.nuvio.tv.data.cee.CeeDiscoverFilters.sortKeys)
         ) return
 
         _uiState.update {
@@ -1213,8 +1215,12 @@ class SearchViewModel @Inject constructor(
                 "year" -> {
                     val builtIn = catalog.addonBaseUrl.contains("cinemana.nuvio.invalid", ignoreCase = true) ||
                         catalog.addonBaseUrl.contains("cee.nuvio.invalid", ignoreCase = true)
+                    val previous = it.selectedDiscoverYear?.toIntOrNull()
+                    val year = value?.toIntOrNull()
+                    val selection = if (builtIn && previous != null && year != null && previous != year)
+                        "${minOf(previous, year)},${maxOf(previous, year)}" else value
                     it.copy(
-                        selectedDiscoverYear = value,
+                        selectedDiscoverYear = selection,
                         selectedDiscoverSort = if (builtIn && value != null) null else it.selectedDiscoverSort,
                         selectedDiscoverLanguage = if (builtIn && value != null) null else it.selectedDiscoverLanguage
                     )
@@ -1232,7 +1238,8 @@ class SearchViewModel @Inject constructor(
             it.key == state.selectedDiscoverCatalogKey
         } ?: return
 
-        if (!catalog.addonBaseUrl.contains("cinemana.nuvio.invalid", ignoreCase = true)) return
+        if (!catalog.addonBaseUrl.contains("cinemana.nuvio.invalid", ignoreCase = true) &&
+            !catalog.addonBaseUrl.contains("cee.nuvio.invalid", ignoreCase = true)) return
 
         val allowed = languageId == null ||
             state.cinemanaLanguages.any { it.id == languageId }
@@ -1256,15 +1263,20 @@ class SearchViewModel @Inject constructor(
             it.key == state.selectedDiscoverCatalogKey
         } ?: return
 
-        if (!catalog.addonBaseUrl.contains("cinemana.nuvio.invalid", ignoreCase = true)) {
+        if (catalog.addonBaseUrl.contains("cee.nuvio.invalid", ignoreCase = true)) {
+            val options = com.nuvio.tv.data.cee.CeeDiscoverFilters.languages(state.selectedDiscoverGenre)
+            _uiState.update { current -> current.copy(cinemanaLanguages = options.map {
+                CinemanaLanguageOption(it.id, it.name, it.movies, it.series)
+            }, cinemanaLanguagesLoading = false) }
             return
         }
+        if (!catalog.addonBaseUrl.contains("cinemana.nuvio.invalid", ignoreCase = true)) return
 
         val genre = state.selectedDiscoverGenre ?: return
         val category = com.nuvio.android.cinemana.CinemanaCatalogs.category(genre)
             ?: return
 
-        val categoryIds = category.remoteIds
+        val categoryIds = category.remoteIds.replace("97,84", "84")
         val cacheKey = categoryIds
 
         cinemanaLanguageJob?.cancel()
@@ -1298,7 +1310,7 @@ class SearchViewModel @Inject constructor(
                         com.nuvio.android.cinemana.CinemanaCatalogs.category(it)
                     }
 
-                if (currentCategory?.remoteIds == categoryIds &&
+                if (currentCategory?.remoteIds?.replace("97,84", "84") == categoryIds &&
                     current.selectedDiscoverCatalogKey == state.selectedDiscoverCatalogKey
                 ) {
                     val selectedBeforeUpdate = _uiState.value.selectedDiscoverLanguage
@@ -1313,10 +1325,9 @@ class SearchViewModel @Inject constructor(
                             }
                         }
                         val stillAvailable = availableLanguages.any { it.id == selected }
-                        val defaultLanguage = availableLanguages.firstOrNull { it.id == "7" }
 
                         latest.copy(
-                            selectedDiscoverLanguage = if (latest.selectedDiscoverYear != null) null else if (stillAvailable) selected else defaultLanguage?.id,
+                            selectedDiscoverLanguage = if (latest.selectedDiscoverYear != null) null else if (stillAvailable) selected else null,
                             cinemanaLanguages = languages,
                             cinemanaLanguagesLoading = false
                         )
@@ -1335,7 +1346,7 @@ class SearchViewModel @Inject constructor(
                         com.nuvio.android.cinemana.CinemanaCatalogs.category(it)
                     }
 
-                if (currentCategory?.remoteIds == categoryIds) {
+                if (currentCategory?.remoteIds?.replace("97,84", "84") == categoryIds) {
                     _uiState.update {
                         it.copy(
                             cinemanaLanguages = cinemanaLanguageCache[cacheKey]
@@ -1351,6 +1362,10 @@ class SearchViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 selectedDiscoverGenre = genre,
+                selectedDiscoverSort = it.selectedDiscoverSort?.takeUnless {
+                    (genre == null || genre in setOf("cinemana_all", "cinemana_all_series")) &&
+                        it in setOf("title_asc", "title_desc")
+                },
                 selectedDiscoverYear = null,
                 selectedDiscoverLanguage = null,
                 cinemanaLanguages = emptyList(),
@@ -1421,14 +1436,6 @@ class SearchViewModel @Inject constructor(
                 _uiState.update { it.copy(discoverLoadingMore = true) }
             }
 
-            val waitingForCinemanaLanguage =
-                selectedCatalog.addonBaseUrl.contains("cinemana.nuvio.invalid", ignoreCase = true) &&
-                    state.selectedDiscoverGenre != null &&
-                    state.selectedDiscoverYear == null &&
-                    state.cinemanaLanguagesLoading
-
-            if (waitingForCinemanaLanguage) return@launch
-
             val currentPage = if (reset) 1 else state.discoverPage + 1
             val visibleCountBeforeRequest = state.discoverResults.size
             val isCinemanaDiscover = selectedCatalog.addonBaseUrl.contains("cinemana.nuvio.invalid", ignoreCase = true)
@@ -1438,9 +1445,10 @@ class SearchViewModel @Inject constructor(
                 selectedCatalog.catalogId
             }
             val effectiveSkipStep = when {
-                isCinemanaDiscover && state.selectedDiscoverYear != null -> 12
-                isCinemanaDiscover &&
-                    effectiveCatalogId !in setOf("cinemana_all", "cinemana_all_series") -> 30
+                isCinemanaDiscover -> 30
+                selectedCatalog.addonBaseUrl.contains("cee.nuvio.invalid") ->
+                    com.nuvio.tv.data.cee.CeeDiscoverFilters.pageSize(state.selectedDiscoverYear != null,
+                        state.selectedDiscoverGenre, state.selectedDiscoverSort)
                 else -> selectedCatalog.skipStep
             }
             val skip = if (currentPage <= 1) 0 else (currentPage - 1) * effectiveSkipStep
@@ -1448,7 +1456,7 @@ class SearchViewModel @Inject constructor(
                 if (!isCinemanaDiscover) {
                     state.selectedDiscoverGenre?.takeIf { it.isNotBlank() }?.let { put("genre", it) }
                 }
-                if (isCinemanaDiscover && state.selectedDiscoverYear == null) {
+                if ((isCinemanaDiscover || selectedCatalog.addonBaseUrl.contains("cee.nuvio.invalid")) && state.selectedDiscoverYear == null) {
                     state.selectedDiscoverLanguage
                         ?.takeIf { languageId ->
                             state.cinemanaLanguages.any { it.id == languageId }
@@ -1456,9 +1464,10 @@ class SearchViewModel @Inject constructor(
                         ?.let { put("language", it) }
                 }
                 state.selectedDiscoverYear
-                    ?.takeIf { it in selectedCatalog.yearOptions }
+                    ?.takeIf { year -> year.split(",").all { it in selectedCatalog.yearOptions } }
                     ?.let { put("year", it) }
-                state.selectedDiscoverSort
+                val selectedSort = state.selectedDiscoverSort ?: if (isCinemanaDiscover) "desc" else null
+                selectedSort
                     ?.takeIf {
                         state.selectedDiscoverYear == null ||
                             (!selectedCatalog.addonBaseUrl.contains("cinemana.nuvio.invalid", ignoreCase = true) &&
@@ -1466,6 +1475,8 @@ class SearchViewModel @Inject constructor(
                     }
                     ?.takeIf { sort ->
                     sort in selectedCatalog.sortOptions ||
+                        (selectedCatalog.addonBaseUrl.contains("cee.nuvio.invalid") &&
+                            sort in com.nuvio.tv.data.cee.CeeDiscoverFilters.sortKeys) ||
                         (isCinemanaDiscover && sort in setOf(
                             "desc", "asc", "r_desc", "r_asc",
                             "stars_desc", "stars_asc",

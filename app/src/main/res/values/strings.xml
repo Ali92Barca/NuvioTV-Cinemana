@@ -3418,4 +3418,8 @@
     <string name="autosync_label_synced">Auto synced</string>
     <string name="stream_resume_from_time">Resume from %1$s</string>
     <string name="stream_resume_from_percent">Resume from %1$d%%</string>
+    <string name="trakt_friends_home">Friends Watching</string>
+    <string name="trakt_friend_watching">Watching</string>
+    <string name="trakt_friend_watched">Finished</string>
+    <string name="trakt_friends_home_setting">Show Trakt friends’ watching activity on Home</string>
 </resources>

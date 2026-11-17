@@ -78,6 +78,7 @@ class HomeViewModel @Inject constructor(
     internal val tmdbSettingsDataStore: TmdbSettingsDataStore,
     internal val mdbListSettingsDataStore: MDBListSettingsDataStore,
     internal val traktSettingsDataStore: TraktSettingsDataStore,
+    internal val traktAuthService: com.nuvio.tv.data.repository.TraktAuthService,
     internal val authSessionNoticeDataStore: AuthSessionNoticeDataStore,
     internal val tmdbService: TmdbService,
     internal val tmdbMetadataService: TmdbMetadataService,
@@ -125,6 +126,7 @@ class HomeViewModel @Inject constructor(
 
     internal val _uiState = MutableStateFlow(HomeUiState())
     internal val shuffleHomeRefresh = MutableStateFlow(HomeShuffleRefresh())
+    internal val traktFriends = kotlinx.coroutines.flow.MutableStateFlow<com.nuvio.tv.domain.model.CatalogRow?>(null)
     val uiState: StateFlow<HomeUiState> by lazy { createShuffleHomeState() }
 
     fun beginShuffleHomeVisit() {
